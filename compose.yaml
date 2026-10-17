@@ -1,0 +1,89 @@
+name: dtv-stack
+services:
+  recisdb-proxy:
+    build:
+      context: .
+      dockerfile: docker/recisdb-proxy/Dockerfile
+      args:
+        RECISDB_REPO: ${RECISDB_REPO}
+        RECISDB_REF: ${RECISDB_REF}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      BONCAS_B25_HOST: ${BONCAS_B25_HOST}
+      BONCAS_B25_PORT: ${BONCAS_B25_PORT}
+      BONCAS_4K_HOST: ${BONCAS_4K_HOST}
+      BONCAS_4K_PORT: ${BONCAS_4K_PORT}
+    group_add:
+      - "${VIDEO_GID:-44}"
+    volumes:
+      - ./config:/config:ro
+      - ./data/recisdb:/data
+    ports:
+      - "${RECISDB_WEB_PORT}:40080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:40080/mirakurun/api/status >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  epgstation:
+    build:
+      context: .
+      dockerfile: docker/epgstation/Dockerfile
+      args:
+        EPGSTATION_REPO: ${EPGSTATION_REPO}
+        EPGSTATION_REF: ${EPGSTATION_REF}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      TMPDIR: /app/data/tmp
+    depends_on:
+      recisdb-proxy:
+        condition: service_healthy
+    volumes:
+      - ./config/config.yml.example:/config-template/config.yml:ro
+      - ${RECORDED_DIR}:/recorded
+      - ./data/epgstation:/app/data
+      - ./data/epgstation-logs:/app/logs
+      - ./data/epgstation-thumbnail:/app/thumbnail
+      - ./data/epgstation-drop:/app/drop
+    ports:
+      - "${EPGSTATION_PORT}:8888"
+
+  konomitv:
+    build:
+      context: ${KONOMITV_SOURCE:-../KonomiTV}
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+    depends_on:
+      recisdb-proxy:
+        condition: service_healthy
+    volumes:
+      - ./config/config.yaml.example:/code/config.yaml:ro
+      - ${RECORDED_DIR}:/host-rootfs/recorded:ro
+      - ./data/konomitv:/code/server/data
+      - ./data/konomitv-logs:/code/server/logs
+    ports:
+      - "${KONOMITV_PORT}:7000"
+
+  mariadb:
+    image: mariadb:11
+    profiles: [mariadb]
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: epgstation
+      MARIADB_USER: epgstation
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Set MARIADB_PASSWORD in .env when using --profile mariadb}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Set MARIADB_ROOT_PASSWORD in .env when using --profile mariadb}
+      TZ: ${TZ}
+    volumes:
+      - ./data/mariadb:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10

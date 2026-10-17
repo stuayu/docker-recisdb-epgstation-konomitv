@@ -1,0 +1,6 @@
+.env
+compose.tuners.yaml
+data/
+config/recisdb-proxy.toml
+config/config.yml
+config/config.yaml

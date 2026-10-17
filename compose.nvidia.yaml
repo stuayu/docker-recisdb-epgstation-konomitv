@@ -1,0 +1,9 @@
+services:
+  konomitv:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility, video]

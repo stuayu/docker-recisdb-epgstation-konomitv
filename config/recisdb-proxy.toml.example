@@ -1,0 +1,19 @@
+# Compose向け初期設定。実値は .env から entrypoint が置換する。
+[server]
+listen = "0.0.0.0:40070"
+web_listen = "0.0.0.0:40080"
+
+[database]
+path = "/data/recisdb-proxy.db"
+
+[web]
+auth_enabled = true
+
+[mirakurun]
+enabled = true
+
+[b25]
+boncaslink_server = "${BONCAS_B25_HOST}:${BONCAS_B25_PORT}"
+
+[mmttlv]
+boncaslink_server = "${BONCAS_4K_HOST}:${BONCAS_4K_PORT}"
