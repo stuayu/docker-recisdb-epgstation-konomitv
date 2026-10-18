@@ -1,4 +1,4 @@
-name: dtv-stack
+name: docker-recisdb-epgstation-konomitv
 services:
   recisdb-proxy:
     build:

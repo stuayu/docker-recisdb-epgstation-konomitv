@@ -1,4 +1,4 @@
-# dtv-stack
+# docker-recisdb-epgstation-konomitv
 
 Compose で recisdb-proxy、EPGStation、KonomiTV を連携。チューナーは recisdb-proxy のみに渡し、B-CAS / ACAS はカードを挿したホストの BonCasRelay から BonCasLink 互換プロトコルで利用。
 

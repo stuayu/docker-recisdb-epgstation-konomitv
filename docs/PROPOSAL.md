@@ -1,4 +1,4 @@
-# dtv-stack 構成提案
+# docker-recisdb-epgstation-konomitv 構成提案
 
 recisdb-proxy-rs + EPGStation + KonomiTV を Docker Compose で運用し、カードを挿したホストの BonCasRelay から B-CAS / ACAS を共有する構成。
 
