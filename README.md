@@ -421,7 +421,7 @@ KonomiTV フォークは Akebi をコンテナ内 `0.0.0.0:server.port` で待�
 
 | サービス | ホスト上で編集するファイル | コンテナ内のパス | 内容 | 編集後の操作 |
 | --- | --- | --- | --- | --- |
-| recisdb-proxy | `config/recisdb-proxy/recisdb-proxy.toml` | `/data/recisdb-proxy.toml` | BonCasLink 接続先、Web 認証、DB パス。Web 画面の自動設定が preview 用のパスを書き換えることがあります | `docker compose restart recisdb-proxy` |
+| recisdb-proxy | `config/recisdb-proxy/recisdb-proxy.toml` | `/data/recisdb-proxy.toml` | BonCasLink 接続先、Web 認証、DB パス。初回セットアップでプレビュー用 FFmpeg / tsreadex を自動設定し、`data/recisdb/thirdparty/` に永続保存します | `docker compose restart recisdb-proxy` |
 | EPGStation | `config/epgstation/config.yml` | `/app/config/config.yml` | DB 接続、エンコード設定、Amatsukaze 連携。DB パスワードを含むため権限は 600 です | `docker compose restart epgstation` |
 | KonomiTV | `config/konomitv/config.yaml` | `/code/config.yaml` | KonomiTV サーバー設定。KonomiTV の設定画面からも保存されます | `docker compose restart konomitv` |
 | EDCB (任意) | `config/edcb/*.ini`、`config/edcb/Setting/` の INI・ChSet | `/config/edcb/` から `/var/local/edcb/` へリンク | 録画・チューナー・WebUI 設定。予約・EPG は `data/edcb/` に保存します | `docker compose restart edcb` |

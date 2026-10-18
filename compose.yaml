@@ -14,6 +14,8 @@ services:
       TZ: ${TZ}
     volumes:
       - ./data/recisdb:/data
+      # 自動セットアップした FFmpeg と tsreadex をホスト側へ永続化します。
+      - ./data/recisdb/thirdparty:/opt/recisdb-proxy/thirdparty
       # Host-editable settings created by setup.sh. Read-write: recisdb-proxy rewrites it for preview setup.
       - ./config/recisdb-proxy/recisdb-proxy.toml:/data/recisdb-proxy.toml
     ports:

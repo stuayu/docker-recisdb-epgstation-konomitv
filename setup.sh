@@ -360,7 +360,11 @@ if ((edcb_enabled)); then
   mkdir -p data/edcb
   while IFS= read -r directory; do mkdir -p -- "$directory/edcb"; done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$storage_json")
 fi
-mkdir -p data/recisdb data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
+mkdir -p data/recisdb data/recisdb/thirdparty data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
+thirdparty_owner=$(stat -c '%u:%g' data/recisdb/thirdparty)
+if [[ $thirdparty_owner != "$run_uid:$run_gid" ]]; then
+  confirm_sudo chown -R "$run_uid:$run_gid" data/recisdb/thirdparty || fail 'tsreadex の保存先を実行 UID/GID から書き込めません。' 'data/recisdb/thirdparty の所有者を RUN_UID/RUN_GID に合わせてください。'
+fi
 mkdir -p -- "$capture_dir"
 if [[ ! -w $capture_dir ]]; then
   confirm_sudo chown "$run_uid:$run_gid" "$capture_dir" || fail "キャプチャ保存先へ書き込めません: $capture_dir" '実行 UID/GID で書き込めるよう所有者を合わせてください。'
@@ -419,6 +423,26 @@ while ((SECONDS<deadline)); do
   sleep 3
 done
 if ((services_ready && http_ready)); then ok '選択したサービスの起動と HTTP 応答を確認'; else echo 'サービス起動または HTTP 応答がタイムアウトしました。docker compose ps / logs を確認してください。'; fi
+step 'ブラウザプレビュー用 FFmpeg・tsreadex を自動セットアップ'
+if ((services_ready && http_ready)); then
+  preview_current_config=$("$docker_cmd" compose exec -T recisdb-proxy curl -fsS --max-time 10 http://127.0.0.1:40080/api/preview-config 2>/dev/null || true)
+  preview_current_path=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("config", {}).get("preprocessor_path", ""))' "$preview_current_config" 2>/dev/null || true)
+  if [[ -n $preview_current_path ]] && "$docker_cmd" compose exec -T recisdb-proxy test -x "$preview_current_path"; then
+    ok "tsreadex を確認: $preview_current_path"
+  elif preview_setup_response=$("$docker_cmd" compose exec -T recisdb-proxy curl -fsS --max-time 900 -X POST http://127.0.0.1:40080/api/preview-config/auto-setup 2>&1); then
+    preview_setup_path=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("report", {}).get("preprocessor_path", ""))' "$preview_setup_response" 2>/dev/null || true)
+    if [[ -n $preview_setup_path ]] && "$docker_cmd" compose exec -T recisdb-proxy test -x "$preview_setup_path"; then
+      ok "tsreadex を永続領域へ導入: data/recisdb/thirdparty/tsreadex/tsreadex"
+    else
+      preview_setup_warning=$(python3 -c 'import json,sys; print("; ".join(json.loads(sys.argv[1]).get("report", {}).get("warnings", [])))' "$preview_setup_response" 2>/dev/null || true)
+      message "tsreadex の自動導入を確認できません。${preview_setup_warning:-API 応答または保存先を確認してください。}"
+    fi
+  else
+    message "プレビュー自動セットアップに失敗しました。recisdb-proxy のログと通信状態を確認してください。$preview_setup_response"
+  fi
+else
+  message 'サービスが起動・応答していないため、tsreadex の自動セットアップを省略しました。'
+fi
 step 'チューナー登録・チャンネルスキャン'
 if ((NO_SCAN)); then
   echo '登録・スキャンを省略しました。後で make scan を実行してください。'

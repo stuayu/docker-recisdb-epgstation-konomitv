@@ -31,8 +31,10 @@ ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Tokyo
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libssl3 libgcc-s1 libstdc++6 gettext-base tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system app && useradd --system --gid app --home-dir /data --no-create-home app
-COPY --from=builder /src/target/release/recisdb-proxy /usr/local/bin/recisdb-proxy
+RUN install -d -o app -g app /opt/recisdb-proxy/thirdparty
+COPY --from=builder --chown=app:app /src/target/release/recisdb-proxy /opt/recisdb-proxy/recisdb-proxy
 COPY docker/recisdb-proxy/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENV PATH="/opt/recisdb-proxy:${PATH}"
 RUN chmod 755 /usr/local/bin/entrypoint.sh && mkdir -p /config /data /data/logs && chown -R app:app /data
 USER app
 VOLUME ["/config", "/data"]
