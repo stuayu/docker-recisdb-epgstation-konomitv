@@ -28,7 +28,7 @@ RUN cargo build --release -p recisdb-proxy
 
 FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Tokyo
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libssl3 libgcc-s1 libstdc++6 gettext-base tzdata \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libssl3 libgcc-s1 libstdc++6 gettext-base tzdata xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system app && useradd --system --gid app --home-dir /data --no-create-home app
 RUN install -d -o app -g app /opt/recisdb-proxy/thirdparty
