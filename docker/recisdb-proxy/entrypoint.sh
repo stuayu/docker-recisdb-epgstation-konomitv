@@ -5,7 +5,7 @@ if [ -z "${BONCAS_B25_HOST:-}" ]; then
   exit 1
 fi
 
-envsubst '${BONCAS_B25_HOST} ${BONCAS_B25_PORT} ${BONCAS_4K_HOST} ${BONCAS_4K_PORT}' \
+envsubst "\${BONCAS_B25_HOST} \${BONCAS_B25_PORT} \${BONCAS_4K_HOST} \${BONCAS_4K_PORT}" \
   < /config/recisdb-proxy.toml.example > /data/recisdb-proxy.toml.tmp
 if [ -n "${BONCAS_4K_HOST:-}" ]; then
   mv /data/recisdb-proxy.toml.tmp /data/recisdb-proxy.toml

@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-envsubst '${MARIADB_PASSWORD}' < /config-template/config.yml > /app/config/config.yml
+envsubst "\${MARIADB_PASSWORD}" < /config-template/config.yml > /app/config/config.yml
 mkdir -p /app/data/tmp /app/logs/Operator /app/logs/Service /app/logs/EPGUpdater
 
 for name in operatorLogConfig serviceLogConfig epgUpdaterLogConfig; do

@@ -1,4 +1,22 @@
-.PHONY: config tuners build up down logs
+.PHONY: setup status update test config tuners build up down logs
+
+setup:
+	./setup.sh
+
+status:
+	docker compose ps
+	@host=$$(hostname -I 2>/dev/null | awk '{print $$1}'); [ -n "$$host" ] || host=localhost; \
+	. ./.env; printf 'recisdb-proxy: http://%s:%s/\nEPGStation: http://%s:%s/\nKonomiTV: http://%s:%s/\n' "$$host" "$$RECISDB_WEB_PORT" "$$host" "$$EPGSTATION_PORT" "$$host" "$$KONOMITV_PORT"
+
+update:
+	@source=$$(sed -n 's/^KONOMITV_SOURCE=//p' .env | tail -n1); \
+	[ -n "$$source" ] || source=../KonomiTV; \
+	git -C "$$source" pull --ff-only
+	docker compose build
+	docker compose up -d
+
+test:
+	bash tests/setup_test.sh
 
 config:
 	cp -n .env.example .env || true

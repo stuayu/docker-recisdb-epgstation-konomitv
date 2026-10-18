@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-script_dir=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+script_dir=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 dev_dir=${DEV_DIR:-/dev}
 output=${TUNERS_COMPOSE_FILE:-"$script_dir/compose.tuners.yaml"}
 tmp_file=${output}.tmp
