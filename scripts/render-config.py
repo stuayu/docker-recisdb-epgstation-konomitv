@@ -23,7 +23,8 @@ SERVICES = {
     'recisdb-proxy': {
         'template': 'templates/recisdb-proxy/recisdb-proxy.toml.example',
         'output': 'config/recisdb-proxy/recisdb-proxy.toml',
-        'mode': 0o644,
+        # May contain an explicit [web] auth_token override.
+        'mode': 0o600,
         # The old entrypoint rendered into data/recisdb (the file the service actually read).
         'legacy': ['data/recisdb/recisdb-proxy.toml', 'config/recisdb-proxy.toml'],
     },
@@ -107,6 +108,37 @@ def migrate_konomitv(root):
     with path.open('w', encoding='utf-8') as file:
         file.write(migrated)
     print('移行: config/konomitv/config.yaml の Windows upload_folders を /data/konomitv-capture に置き換えました。')
+    print(f'退避: {backup.relative_to(root)}')
+
+
+def migrate_recisdb_auth(root, path):
+    if not path.is_file():
+        return
+    text = path.read_text(encoding='utf-8-sig')
+    section = re.search(r'(?ms)^\[web\][ \t]*\r?\n(.*?)(?=^\[|\Z)', text)
+    if not section:
+        return
+    body = section.group(1)
+    if re.search(r'(?m)^\s*auth_token\s*=', body):
+        print('認証設定を維持: config/recisdb-proxy/recisdb-proxy.toml に auth_token が明示されています。')
+        return
+    enabled = re.search(r'(?m)^(\s*auth_enabled\s*=\s*)true(\s*(?:#.*)?(?:\r?\n|$))', body, re.I)
+    if not enabled:
+        return
+    replacement = body[:enabled.start()] + enabled.group(1) + 'false' + enabled.group(2) + body[enabled.end():]
+    migrated = text[:section.start(1)] + replacement + text[section.end(1):]
+    backup_dir = path.parent / 'backup'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = backup_dir / f'{path.name}.{stamp}'
+    counter = 1
+    while backup.exists():
+        backup = backup_dir / f'{path.name}.{stamp}-{counter}'
+        counter += 1
+    shutil.copy2(path, backup)
+    with path.open('w', encoding='utf-8') as file:
+        file.write(migrated)
+    print('移行: recisdb-proxy Web 認証を無効化しました。')
     print(f'退避: {backup.relative_to(root)}')
 
 
@@ -241,6 +273,8 @@ def first_run(root, env):
             out = root / spec['output']
             if out.exists():
                 print(f'既存の設定を維持: {spec["output"]}')
+                if name == 'recisdb-proxy':
+                    migrate_recisdb_auth(root, out)
                 check_amatsukaze_section(name, out, env)
                 continue
             legacy = next((root / p for p in spec['legacy'] if (root / p).is_file()), None)
@@ -252,6 +286,8 @@ def first_run(root, env):
             else:
                 write_new(out, render(name, (root / spec['template']).read_text(encoding='utf-8'), env), spec['mode'])
                 print(f'作成: {spec["output"]} (テンプレート {spec["template"]} から生成)')
+            if name == 'recisdb-proxy':
+                migrate_recisdb_auth(root, out)
             check_amatsukaze_section(name, out, env)
 
 

@@ -1,4 +1,4 @@
-.PHONY: setup status update test config tuners build up down logs edcb-chset regen-config backup restore storage
+.PHONY: setup status update test config tuners scan build up down logs edcb-chset regen-config backup restore storage
 
 storage:
 	./setup.sh --storage-only
@@ -24,12 +24,16 @@ test:
 	python3 tests/edcb_test.py
 	python3 tests/config_test.py
 	python3 tests/review_test.py
+	python3 tests/tuner_setup_test.py
 
 config:
 	./setup.sh --reconfigure
 
 tuners:
-	./scripts/gen-tuners.sh
+	python3 scripts/tuner-setup.py register
+
+scan:
+	python3 scripts/tuner-setup.py scan
 
 build:
 	docker compose build

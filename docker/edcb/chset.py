@@ -4,17 +4,27 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import sys
 import time
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def fetch(base, path, token=''):
     headers = {'Authorization': f'Bearer {token}'} if token else {}
-    with urlopen(Request(base + path, headers=headers), timeout=10) as response:
+    # Credentials are only for this proxy, never an environment HTTP proxy or
+    # a redirect destination. The container talks directly on the Compose LAN.
+    opener = build_opener(ProxyHandler({}), NoRedirect())
+    with opener.open(Request(base + path, headers=headers), timeout=10) as response:
         return response.read()
 
 
@@ -85,6 +95,16 @@ def generate(base, token):
     return encode(ordered), encode(ch5.values())
 
 
+def auth_enabled(config):
+    try:
+        text = config.read_text(encoding='utf-8-sig')
+    except OSError:
+        return True
+    section = re.search(r'(?ms)^\[web\][ \t]*\r?\n(.*?)(?=^\[|\Z)', text)
+    option = re.search(r'(?m)^\s*auth_enabled\s*=\s*(true|false)\b', section.group(1), re.I) if section else None
+    return not (option and option.group(1).lower() == 'false')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--refresh', action='store_true')
@@ -97,19 +117,25 @@ def main():
             return
         raise ValueError('ChSet の一部だけ存在。make edcb-chset で再取得してください')
     base = os.environ.get('RECISDB_URL', 'http://recisdb-proxy:40080').rstrip('/')
+    config = Path(os.environ.get('RECISDB_CONFIG', '/recisdb-proxy.toml'))
+    needs_auth = auth_enabled(config)
     result = None
     for attempt in range(3):
         try:
-            # The token is persisted even when TOML supplies an explicit override.
-            db_path = Path(os.environ.get('RECISDB_DATABASE', '/recisdb/recisdb-proxy.db'))
-            with sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True) as db:
-                row = db.execute('SELECT auth_token FROM web_auth_config WHERE id = 1').fetchone()
-            if not row or not row[0]:
-                raise ValueError('recisdb-proxy API token がまだありません')
-            result = generate(base, row[0])
+            token = ''
+            if needs_auth:
+                # The token is persisted even when TOML supplies an explicit override.
+                db_path = Path(os.environ.get('RECISDB_DATABASE', '/recisdb/recisdb-proxy.db'))
+                with sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True) as db:
+                    row = db.execute('SELECT auth_token FROM web_auth_config WHERE id = 1').fetchone()
+                if not row or not row[0]:
+                    raise ValueError('recisdb-proxy API token がまだありません')
+                token = row[0]
+            result = generate(base, token)
             break
         except (OSError, ValueError, KeyError, IndexError, TypeError, sqlite3.Error) as error:
-            print(f'[edcb] ChSet 取得失敗 ({attempt + 1}/3): {error}', file=sys.stderr)
+            reason = f'HTTP {error.code}' if isinstance(error, HTTPError) else str(error)
+            print(f'[edcb] ChSet 取得失敗 ({attempt + 1}/3): {reason}', file=sys.stderr)
             if attempt < 2:
                 time.sleep(float(os.environ.get('EDCB_RETRY_SECONDS', '2')))
     if result is None:

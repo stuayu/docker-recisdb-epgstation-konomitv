@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as temp:
             requests.append(self.path)
             if path.path.startswith('/api/'):
                 if state['unauthorized'] or self.headers.get('Authorization') != 'Bearer secret':
-                    self.send_error(401)
+                    self.send_error(401, 'secret')
                     return
             self.send_response(200)
             self.end_headers()
@@ -104,7 +104,9 @@ with tempfile.TemporaryDirectory() as temp:
         assert not requests  # Existing settings never overwritten at boot.
         for failure in ('unauthorized', 'broken'):
             state[failure] = True
-            assert subprocess.run(command + ['--refresh'], env=env, capture_output=True).returncode == 1
+            failed = subprocess.run(command + ['--refresh'], env=env, capture_output=True)
+            assert failed.returncode == 1
+            assert b'secret' not in failed.stdout + failed.stderr
             assert saved == (ch4.read_bytes(), ch5.read_bytes())
             state[failure] = False
         subprocess.run(command + ['--refresh'], env=env, check=True)

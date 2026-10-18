@@ -79,6 +79,9 @@ with tempfile.TemporaryDirectory() as temp:
     render(repo, env, ['first-run'])
     toml = (repo / 'config/recisdb-proxy/recisdb-proxy.toml').read_text(encoding='utf-8')
     check('boncaslink_server = "192.168.1.10:6900"' in toml, 'B25 relay embedded')
+    check(re.search(r'(?m)^auth_enabled = false$', toml), 'Web auth disabled by default')
+    check(not re.search(r'RUST_LOG', (repo / 'docker/recisdb-proxy/entrypoint.sh').read_text()),
+          'recisdb entrypoint does not override RUST_LOG')
     check('[mmttlv]' not in toml, '4K table removed when no 4K relay')
     check((repo / 'config/konomitv/config.yaml').read_bytes() == (repo / 'templates/konomitv/config.yaml.example').read_bytes(),
           'KonomiTV copied from template')
@@ -91,7 +94,7 @@ with tempfile.TemporaryDirectory() as temp:
     check('amatsukaze' not in epg, 'Amatsukaze section absent when disabled')
     check('${' not in (repo / 'config/epgstation/config.yml').read_text(encoding='utf-8'), 'no unresolved placeholders')
     check(oct((repo / 'config/epgstation/config.yml').stat().st_mode & 0o777) == '0o600', 'EPGStation config is 0600')
-    check(oct((repo / 'config/recisdb-proxy/recisdb-proxy.toml').stat().st_mode & 0o777) == '0o644', 'recisdb config is 0644')
+    check(oct((repo / 'config/recisdb-proxy/recisdb-proxy.toml').stat().st_mode & 0o777) == '0o600', 'recisdb config is 0600 (optional API token)')
 
     # 2. A second run never overwrites user edits.
     (repo / 'config/recisdb-proxy/recisdb-proxy.toml').write_text('user = "kept"\n', encoding='utf-8')
@@ -99,6 +102,28 @@ with tempfile.TemporaryDirectory() as temp:
     check((repo / 'config/recisdb-proxy/recisdb-proxy.toml').read_text(encoding='utf-8') == 'user = "kept"\n',
           'user recisdb edit preserved')
     check('既存の設定を維持' in out, 'keep message printed')
+
+    # Existing auth is migrated with a backup, but an explicit token means opt-in.
+    auth_repo = make_repo(base / 'auth-migration')
+    auth_env = write_env(base / 'auth-migration/.env')
+    auth_config = auth_repo / 'config/recisdb-proxy/recisdb-proxy.toml'
+    auth_config.parent.mkdir(parents=True)
+    auth_config.write_text('[web]\nauth_enabled = true\n', encoding='utf-8')
+    out = render(auth_repo, auth_env, ['first-run']).stdout
+    check('auth_enabled = false' in auth_config.read_text(encoding='utf-8'), 'existing Web auth disabled')
+    backups = list((auth_config.parent / 'backup').glob('recisdb-proxy.toml.*'))
+    check(len(backups) == 1 and 'auth_enabled = true' in backups[0].read_text(encoding='utf-8'),
+          'existing auth config backed up before migration')
+    check('認証を無効化' in out and '退避:' in out, 'auth migration reported')
+    token_repo = make_repo(base / 'auth-token-preserved')
+    token_env = write_env(base / 'auth-token-preserved/.env')
+    token_config = token_repo / 'config/recisdb-proxy/recisdb-proxy.toml'
+    token_config.parent.mkdir(parents=True)
+    token_config.write_text('[web]\nauth_enabled = true\nauth_token = "custom-token"\n', encoding='utf-8')
+    out = render(token_repo, token_env, ['first-run']).stdout
+    check('auth_enabled = true' in token_config.read_text(encoding='utf-8'), 'explicit token preserves auth')
+    check('auth_token' in out and not list((token_config.parent / 'backup').glob('*')),
+          'explicit token preserve reported without backup')
 
     # 3. Amatsukaze on and 4K relay set: both sections are embedded at first run.
     repo2 = make_repo(base / 'two')

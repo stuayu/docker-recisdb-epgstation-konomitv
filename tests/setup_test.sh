@@ -155,7 +155,8 @@ if (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT=6900 BONCAS_4K_SAME=yes 
 grep -q '^compose build$' "$DOCKER_CALLS" || fail 'build args'
 grep -q '^compose up -d$' "$DOCKER_CALLS" || fail 'up args'
 grep -q '^compose config$' "$DOCKER_CALLS" || fail 'config args'
-grep -q 'test-token' "$TMP/full" || fail 'dashboard token'
+if grep -q 'test-token' "$TMP/full"; then fail 'dashboard token leaked'; fi
+if grep -q '^compose logs --no-color recisdb-proxy$' "$DOCKER_CALLS"; then fail 'setup must not read token logs'; fi
 grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:7000:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:7000/' "$CURL_CALLS" || fail 'KonomiTV HTTPS probe URL'
 grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:40443:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:40443/' "$CURL_CALLS" || fail 'recisdb HTTPS probe URL'
 grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:8443:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:8443/' "$CURL_CALLS" || fail 'EPGStation HTTPS probe URL'

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT"
-NONINTERACTIVE=0 YES=0 RECONFIGURE=0 NO_BUILD=0 NO_START=0 AUTO_INSTALL=0 STORAGE_ONLY=0
+NONINTERACTIVE=0 YES=0 RECONFIGURE=0 NO_BUILD=0 NO_START=0 NO_SCAN=0 AUTO_INSTALL=0 STORAGE_ONLY=0
 DEV_DIR=${DEV_DIR:-/dev}
 ENV_FILE=${ENV_FILE:-$ROOT/.env}
 COMPOSE_TUNERS=${TUNERS_COMPOSE_FILE:-$ROOT/compose.tuners.yaml}
@@ -16,6 +16,7 @@ usage() {
   --yes              既定値で非対話セットアップ
   --no-build         Docker イメージをビルドしない
   --no-start         コンテナを起動しない
+  --no-scan          チューナー登録・スキャン・各サービスへの反映を省略
   --reconfigure      質問と設定だけやり直す (ビルド・起動しない)
   --install-docker   Docker 公式 apt リポジトリから確認後に導入
   --auto-install     不足ソフトの導入・sudo 操作の確認を省略
@@ -33,6 +34,7 @@ EOF
 while (($#)); do
   case $1 in
     --yes) YES=1;; --no-build) NO_BUILD=1;; --no-start) NO_START=1;;
+    --no-scan) NO_SCAN=1;;
     --reconfigure) RECONFIGURE=1; NO_BUILD=1; NO_START=1;;
     --auto-install) AUTO_INSTALL=1;; --storage-only) STORAGE_ONLY=1; NO_BUILD=1; NO_START=1;;
     --install-docker) :;; --help|-h) usage; exit 0;;
@@ -44,7 +46,7 @@ done
 if [[ -t 1 ]]; then GREEN=$'\033[32m'; RED=$'\033[31m'; RESET=$'\033[0m'; else GREEN=''; RED=''; RESET=''; fi
 ok(){ printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
 fail(){ printf '%sエラー:%s %s\n対処: %s\n' "$RED" "$RESET" "$1" "$2" >&2; exit 1; }
-step(){ STEP=$((STEP+1)); printf '\n[%d/11] %s\n' "$STEP" "$*"; }
+step(){ STEP=$((STEP+1)); printf '\n[%d/12] %s\n' "$STEP" "$*"; }
 ask(){ local prompt=$1 default=$2 value; if ((YES || NONINTERACTIVE)); then printf -v REPLY '%s' "$default"; elif [[ -n ${TUI:-} ]]; then ui_ask "$prompt" "$default"; return; else read -r -p "$prompt [$default]: " value; REPLY=${value:-$default}; fi; }
 get(){ local key=$1 default=$2 value; value=$(sed -n "s/^${key}=//p" "$ENV_FILE" 2>/dev/null | tail -n1 || true); printf '%s' "${value:-$default}"; }
 SETTINGS_FILE=$(mktemp)
@@ -374,7 +376,7 @@ if ((NO_BUILD)); then echo 'ビルドを省略しました。'; else
   step 'Docker イメージをビルド (数分以上かかる場合があります)'
   run_logged build "$docker_cmd" compose build || fail 'Docker イメージのビルドに失敗しました。' 'ログの最初のエラー、空き容量、ネットワークを確認してください。'
 fi
-if ((NO_START)); then message "設定完了。起動を省略しました。make build && make up で起動できます。\nrecisdb-proxy http://<IP>:$p1/ / EPGStation http://<IP>:$p2/\nKonomiTV https://<IPをハイフン区切り>.local.konomi.tv:$p3/\nEDCB 有効時 http://<IP>:$edcb_port/E3/ / Amatsukaze 有効時 http://<IP>:$amatsukaze_port/\n次にチャンネルスキャン・make edcb-chset・実録画を確認してください。"; exit 0; fi
+if ((NO_START)); then message "設定完了。起動を省略しました。make build && make up && make scan で受信設定まで進めます。\nrecisdb-proxy http://<IP>:$p1/ / EPGStation http://<IP>:$p2/\nKonomiTV https://<IPをハイフン区切り>.local.konomi.tv:$p3/\nEDCB 有効時 http://<IP>:$edcb_port/E3/ / Amatsukaze 有効時 http://<IP>:$amatsukaze_port/\n次に予約録画・再生を確認してください。"; exit 0; fi
 step 'コンテナを起動'
 run_logged start "$docker_cmd" compose up -d || fail 'コンテナ起動に失敗しました。' 'docker compose logs と docker compose ps で原因を確認してください。'
 step 'サービスの起動を待機'
@@ -396,6 +398,15 @@ while ((SECONDS<deadline)); do
   sleep 3
 done
 if ((services_ready && http_ready)); then ok '選択したサービスの起動と HTTP 応答を確認'; else echo 'サービス起動または HTTP 応答がタイムアウトしました。docker compose ps / logs を確認してください。'; fi
+step 'チューナー登録・チャンネルスキャン'
+if ((NO_SCAN)); then
+  echo '登録・スキャンを省略しました。後で make scan を実行してください。'
+else
+  scan_args=(--automatic)
+  (( ! YES && ! NONINTERACTIVE )) || scan_args+=(--yes)
+  [[ -z ${TUI:-} ]] || scan_args+=(--tui "$TUI")
+  ENV_FILE="$ENV_FILE" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" DOCKER_BIN="$docker_cmd" python3 "$ROOT/scripts/tuner-setup.py" "${scan_args[@]}" || message '受信設定が未完了です。アンテナ・ドライバー・権限を確認し、make scan で再試行してください。セットアップは続行します。'
+fi
 step 'アクセス先と次の作業'
 printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
 if ((amatsukaze_enabled)); then printf 'Amatsukaze WebUI: http://%s:%s/\n' "$ipaddr" "$amatsukaze_port"; fi
@@ -403,14 +414,12 @@ if ((https_enabled)); then printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStati
 if ((edcb_enabled)); then
   printf 'EDCB WebUI: http://%s:%s/E3/\n' "$ipaddr" "$edcb_port"
   if ((https_enabled)); then printf 'EDCB HTTPS: https://%s:%s/E3/\n' "$konomi_host" "$edcb_https_port"; fi
-  echo 'recisdb-proxy のチャンネルスキャン後、make edcb-chset で EDCB に反映してください。'
+  echo 'EDCB の ChSet はスキャン成功後に自動反映します。再取得のみ: make edcb-chset (録画がないとき)。'
 fi
 printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n'
-token=$("$docker_cmd" compose logs --no-color recisdb-proxy 2>/dev/null | sed -n 's/.*Web API auth token: *//p' | tail -n1 || true)
-[[ -z $token ]] || printf '初回ダッシュボード token: %s\n' "$token"
-printf '次にやること:\n1. recisdb-proxy の BonDriver 画面でチューナー登録・チャンネルスキャン。\n2. EPG 取得を待ち、EPGStation で番組表と予約を確認。\n3. KonomiTV で初期設定し、ライブ視聴を確認。\n'
+printf '次にやること:\n1. EPG 取得を待ち、EPGStation / EDCB で番組表と予約を確認。\n2. KonomiTV で初期設定し、ライブ視聴を確認。\n3. 受信設定の警告があれば make scan。デバイス変更時は make tuners && make scan。\n'
 
 message "セットアップ完了。recisdb-proxy http://$ipaddr:$p1/ / EPGStation http://$ipaddr:$p2/ / KonomiTV https://$konomi_host:$p3/
 EDCB 有効時 http://$ipaddr:$edcb_port/E3/ / Amatsukaze 有効時 http://$ipaddr:$amatsukaze_port/
 BonCasRelay Web UI はカードホストの http://127.0.0.1:6980/
-次にチャンネルスキャン・make edcb-chset・予約録画・再生を確認してください。"
+予約録画・再生を確認してください。受信設定の警告があれば make scan で再試行してください。"

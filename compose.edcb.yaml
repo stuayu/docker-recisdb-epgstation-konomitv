@@ -24,6 +24,7 @@ services:
       RECORDED_DIR: ${RECORDED_DIR}
       RECORDED_DIRS_JSON: ${RECORDED_DIRS_JSON:-[]}
       EDCB_TUNER_COUNT: ${EDCB_TUNER_COUNT:-2}
+      RECISDB_CONFIG: /recisdb-proxy.toml
     depends_on:
       recisdb-proxy:
         condition: service_healthy
@@ -32,6 +33,7 @@ services:
       - ./config/edcb:/config/edcb
       - ./config/edcb-to-epgstation:/config/edcb-to-epgstation:ro
       - ./data/recisdb:/recisdb:ro
+      - ./config/recisdb-proxy/recisdb-proxy.toml:/recisdb-proxy.toml:ro
       - ${RECORDED_DIR}:/recorded
     ports:
       - "${EDCB_WEB_PORT:-5510}:5510"

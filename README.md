@@ -291,22 +291,24 @@ cd docker-recisdb-epgstation-konomitv
 ./setup.sh
 ```
 
-対話端末に whiptail または dialog があれば画面で選択できます。ない場合は Debian / Ubuntu で導入を確認し、拒否した場合は文字入力へ戻ります。質問には既定値が表示されます。BonCasRelay のホスト名/IP、録画先、GPU、EDCB、Amatsukaze の利用を選びます。通常の初回構成では Enter で進められます。チューナーが未検出でも続行でき、ドライバー導入後に `make tuners` を実行できます。ビルドと起動を含めず設定だけ行う場合は `./setup.sh --reconfigure` を使います。
+対話端末に whiptail または dialog があれば画面で選択できます。ない場合は Debian / Ubuntu で導入を確認し、拒否した場合は文字入力へ戻ります。質問には既定値が表示されます。BonCasRelay のホスト名/IP、録画先、GPU、EDCB、Amatsukaze の利用を選びます。通常の初回構成では Enter で進められます。チューナーが未検出でも続行でき、ドライバー導入後に `make tuners && make scan` を実行できます。ビルドと起動を含めず設定だけ行う場合は `./setup.sh --reconfigure` を使います。
 
-### 2. ブラウザーで初期設定
+起動確認後、チューナー登録・チャンネルスキャン・EDCB ChSet 配置・局一覧更新を自動実行します。通常は Web 画面でのチューナー登録が不要です。受信できない場合は警告を表示してセットアップを続行し、`make scan` で再試行できます。`--no-scan` でこの処理を省略できます。2 回目以降は成功済みのスキャンと反映を省略し、新しいデバイスは登録・スキャンします。対話実行で既存構成にデバイスが追加された場合は実行を確認します。
 
-1. recisdb-proxy は `http://<録画ホストIP>:40080/` または HTTPS 有効時の `https://<IPをハイフン区切り>.local.konomi.tv:40443/` を開きます。初回 token は `docker compose logs recisdb-proxy` の `Web API auth token:` 行です。セットアップがログから表示できた場合はその token を使ってください。
-2. recisdb-proxy の「BonDriver」画面で検出されたチューナーデバイスを登録し、チャンネルスキャンを実行します。チューナーパスは `/dev/px4video0` など実在する名前を使います。
+### 2. 番組表・録画・視聴を確認
+
+1. recisdb-proxy のチューナー登録・スキャンはセットアップが自動実行します。Web 認証は既定で無効です。認証有効時は API token を `data/recisdb/recisdb-proxy.db` から読み取り専用で取得します。
+2. 受信設定の警告が出た場合は、アンテナ・ドライバー・デバイス権限を確認して `make scan` を実行します。USB 追加・取り外し後は先に `make tuners` を実行します。
 3. EPGStation は `http://<録画ホストIP>:8888/` または HTTPS 有効時の `https://<IPをハイフン区切り>.local.konomi.tv:8443/` を開き、番組表から予約します。EPGStation の Mirakurun 接続先は内部ネットワーク上の `http://recisdb-proxy:40080/mirakurun/` です。
 4. KonomiTV (`https://<IPのドットをハイフンに変換>.local.konomi.tv:7000/`) を開いて初期設定し、チャンネル一覧からライブ視聴します。例: IP が `192.168.1.20` なら `https://192-168-1-20.local.konomi.tv:7000/`。KonomiTV は Akebi による HTTPS が必要で、IP のドットをハイフンにした `*.local.konomi.tv` が正規 URL です。DNS Rebinding Protection が有効なルーターでは名前解決を止められることがあります。その場合はルーターの保護設定を調整するか、公開 DNS を使います。初回起動には外部 DNS / Keyless サーバーとの通信も必要です。KonomiTV の URL 仕様と DNS 問題は [KonomiTV README](https://github.com/stuayu/KonomiTV#httpsaa-bb-cc-ddlocalkonomitv7000-の-url-について)を参照してください。KonomiTV の Mirakurun backend は予約録画に対応しないため、予約は EPGStation または EDCB を使います。
-5. EDCB 有効時は recisdb-proxy のスキャン完了後に `make edcb-chset` を実行し、`http://<録画ホストIP>:5510/E3/` を開きます。EDCB 自身によるチャンネルスキャンや接続設定の手編集は不要です。
+5. EDCB 有効時はスキャン成功後に ChSet と仮想チューナー数を自動反映します。`http://<録画ホストIP>:5510/E3/` を開きます。EDCB 自身によるチャンネルスキャンや接続設定の手編集は不要です。
 6. 地デジ/BS のスクランブル放送で B25 復号、実際の予約録画と再生を確認します。4K は ACAS 対応構成と dantto4k が別途必要です。
 
 ## 手動セットアップ (経験者向け)
 
 ```bash
 ./setup.sh --reconfigure
-make tuners
+./scripts/gen-tuners.sh
 ```
 
 `.env` の `BONCAS_B25_HOST`、`BONCAS_B25_PORT`、`BONCAS_4K_HOST`、`BONCAS_4K_PORT`、`RECORDED_DIR`、`VIDEO_GID`、`KONOMITV_SOURCE` を環境に合わせます。BonCasRelay は APDU を判定して B-CAS / ACAS を既定の同じ 6900 番ポートへ振り分けるため、同じホスト・ポートを設定できます。`VIDEO_GID` はホストの `video` グループ ID です。
@@ -315,6 +317,7 @@ make tuners
 docker compose config
 docker compose build
 docker compose up -d
+make scan
 docker compose logs -f recisdb-proxy
 ```
 
@@ -331,7 +334,8 @@ EPGStation の DB は MariaDB 固定です。設定ファイルは `setup.sh` �
 | 起動 | `make up` |
 | 停止 | `make down` |
 | ログ | `make logs` または `docker compose logs -f recisdb-proxy` |
-| チューナー再検出 | `make tuners` |
+| チューナー再検出・Compose 再生成・proxy 再作成・登録 | `make tuners` |
+| 登録・再スキャン・EDCB 反映・局一覧更新 | `make scan` (録画・視聴がないとき) |
 | EDCB チャンネル再取得 | `make edcb-chset` (EDCB の録画がないとき) |
 | 再ビルド | `make build` |
 | ソース更新・再ビルド・再起動 | `make update` |
@@ -340,11 +344,21 @@ EPGStation の DB は MariaDB 固定です。設定ファイルは `setup.sh` �
 | 設定ファイルの再生成 | `make regen-config SERVICE=<名前>` |
 | バックアップ・復元 | `make backup` / `make restore FILE=...` |
 
+### 自動受信設定と再スキャン
+
+`make tuners` はデバイスを再検出して Compose を再生成し、recisdb-proxy を必要に応じて再作成して登録します。続けて `make scan` で全公開デバイスを再スキャンし、EDCB と各サービスへ反映します。デバイスは 1 ノードまたは DVB frontend につき 1 登録、`max_instances=1`、`stream_format=ts`、グループ未指定です。地デジ・BS/CS の対応範囲は backend と実際の受信結果で判定し、PX-W3U4 の地デジ用と衛星用のノードを同じものとして扱いません。消えたデバイスの登録は警告して保持します。USB の番号変更と故障を区別できず、登録を削除すると既存局設定にも影響するためです。
+
+進捗は完了台数・待機中/スキャン中・経過秒を表示し、セットアップの TUI 使用時はゲージも表示します。上流の既定スキャン上限は 1 台 900 秒、確認間隔は 60 秒です。通常の受信環境での目安は 1 台数分ですが、実測値ではありません。8 台は順番に調べるため数十分を見込んでください。こちらの待機上限は 1 台ごとに `max(1200, サーバー上限 + 確認間隔×2 + 120)` 秒です。必要なら `python3 scripts/tuner-setup.py scan --timeout 2400` で変更できます。
+
+`make scan` は録画・視聴がない時間帯に実行してください。EDCB を停止して INI と ChSet を反映し、EDCB・EPGStation・KonomiTV を再起動します。EDCB の `[BonDriver_LinuxMirakc.so] Count` と `.env` の `EDCB_TUNER_COUNT` は公開中の物理デバイス数へ同期し、変更前のファイルを日時付きで退避します。`[TVTEST] Num=1` はドライバーの種類数なので変更しません。地デジ 6 台・衛星 2 台でも仮想 Count は合計 8 台です。帯域別予約上限を表す設定ではないため、衛星の同時録画数には注意してください。
+
+タイムアウト時も proxy 内のスキャンは継続します。キャンセル API はありません。失敗・0 局の場合は ChSet 更新とサービス再起動を行いませんが、上流が既に変更した局 DB は元に戻しません。詳細な根拠、API、上流改善事項、実機確認項目は [自動受信設定の調査・設計](docs/TUNER_SETUP.md) を参照してください。
+
 ## よくある質問・トラブルシュート
 
 | 症状 | 原因 | 対処 |
 | --- | --- | --- |
-| チャンネルが映らない | チャンネルスキャン未実施、受信状態、チューナー登録不備 | recisdb-proxy の BonDriver 画面でデバイス登録・スキャン。ログとアンテナ受信を確認 |
+| チャンネルが映らない | チャンネルスキャン未実施、受信状態、チューナー登録不備 | `make scan` で再試行。デバイス変更時は先に `make tuners`。ログとアンテナ受信を確認 |
 | B25 復号できない | BonCasRelay 未起動、接続元許可漏れ、カード未認識 | `BONCAS_B25_HOST:PORT` へ TCP 接続できるか確認。Relay の `--allow` と Web 設定のリーダー判定を確認 |
 | チューナーが見えない | デバイスノードなし、udev 権限、生成 Compose が古い | `ls /dev`、`VIDEO_GID`、`make tuners`、`docker compose config` を確認 |
 | KonomiTV が Mirakurun URL を拒否 | `/mirakurun/api/tuners` が Mirakurun 互換 `Server: Mirakurun/...` ヘッダーを返さない | recisdb-proxy の互換 API 応答と `http://recisdb-proxy:40080/mirakurun` を確認 |
@@ -388,7 +402,7 @@ Compose では `data/recisdb` に recisdb-proxy DB/ログ、`data/epgstation` �
 
 KonomiTV は bridge ネットワーク上で稼働し、Mirakurun 接続先は Compose DNS 名 `recisdb-proxy` です。ホスト公開ポート `${KONOMITV_PORT}:7000` がブラウザーからの入口です。録画ディレクトリはコンテナ内 `/host-rootfs/recorded` に読み取り専用で割り当てます。
 
-recisdb-proxy の Web 認証は `config/recisdb-proxy/recisdb-proxy.toml` の `[web] auth_enabled = true` で有効です (初期値は `templates/recisdb-proxy/recisdb-proxy.toml.example`)。初回 token は DB に保存され、再起動後もログの `Web API auth token:` 行に表示されます。Mirakurun API の `/mirakurun/api/*` は token 認証対象外で、Compose 内の EPGStation / KonomiTV は `http://recisdb-proxy:40080/mirakurun/` を使います。
+recisdb-proxy の Web 認証は既定で無効です。`config/recisdb-proxy/recisdb-proxy.toml` の `[web] auth_enabled = false` を使います。アクセス元はファイアウォールで制限してください。認証を使う場合は `true` にし、`auth_token` を設定します。既存設定の `auth_enabled = true` は `first-run` で false に移行し、変更前を `config/recisdb-proxy/backup/` に退避します。`auth_token` 明示時は設定を維持します。token は DB の `web_auth_config.auth_token` に保存されます。Mirakurun API の `/mirakurun/api/*` は token 認証対象外で、Compose 内の EPGStation / KonomiTV は `http://recisdb-proxy:40080/mirakurun/` を使います。
 
 EPGStation は `config/epgstation/config.yml` を `/app/config/config.yml` としてマウントします。起動時には書き換えず、ファイルがなければ起動を止めて setup.sh の実行を促します。ログ設定ファイルがなければフォークの `*.sample.yml` から生成し、`/app/logs` はホストの `data/epgstation-logs` に保存します。
 
@@ -567,7 +581,7 @@ recisdb-proxy-rs 側に必要な改修は、Linux 向け `CreateBonStruct` / `ST
 | --- | --- |
 | `Common.ini` | `DataSavePath=/var/local/edcb/Setting`、`RecFolderNum=1`、`RecFolderPath0=/recorded/edcb` |
 | `EpgTimerSrv.ini [SET]` | `EnableHttpSrv=1`、`HttpPort=5510`、`HttpPublicFolder=/var/local/edcb/HttpPublic`、IPv4 loopback/RFC1918 LAN を許可、`EnableTCPSrv=0`、`RecEndMode=0` |
-| `[BonDriver_LinuxMirakc.so]` | `Count=EDCB_TUNER_COUNT` (既定 2)、`Priority=1` (EDCB 内部 ID)、`GetEpg=1`、`EPGCount=1` |
+| `[BonDriver_LinuxMirakc.so]` | `Count=EDCB_TUNER_COUNT` (初期値 2、スキャン成功後に公開中の物理デバイス数へ同期)、`Priority=1` (EDCB 内部 ID)、`GetEpg=1`、`EPGCount=1` |
 | `[EPG_CAP]` | 毎日 06:00 / 18:00、両方有効 |
 | `[TVTEST]` | `Num=1`、`0=BonDriver_LinuxMirakc.so` |
 | `[REC_DEF]` | `RecMode=3` (指定サービスのみ・B25 処理なし) |
@@ -582,12 +596,12 @@ recisdb-proxy がサーバー側で復号し、互換 API の `decode` クエリ
 
 ### ChSet の自動投入・再取得
 
-1. 起動時に recisdb-proxy の永続 DB を読み取り専用で開き、`web_auth_config.auth_token` を取得します。利用者による token の転記は不要です。
-2. 認証付き `/api/client-view/targets` で登録済みドライバーを列挙し、`/api/client-view/files/chset4?tuner=...` と `chset5?tuner=...` を取得します。
+1. Web 認証が有効な設定では起動時に recisdb-proxy の永続 DB を読み取り専用で開き、`web_auth_config.auth_token` を取得します。認証無効時は token なしで接続します。
+2. `/api/client-view/targets` で登録済みドライバーを列挙し、`/api/client-view/files/chset4?tuner=...` と `chset5?tuner=...` を取得します。認証有効時だけ token を付けます。
 3. `/mirakurun/api/services` の順番に合わせて空間・チャンネル番号を変換し、サービスを統合します。`BonDriver_LinuxMirakc(LinuxMirakc).ChSet4.txt` と `ChSet5.txt` を `config/edcb/Setting` に UTF-8 BOM で保存します。BNDP 用の ChSet4 をそのまま置くことはできません。
-4. 未スキャン・認証失敗・不正応答なら既存ファイルを保持し、ログへ理由を出します。初回は ChSet なしでも WebUI を起動します。recisdb-proxy でスキャンを完了してから `make edcb-chset` を実行してください。
+4. 未スキャン・認証失敗・不正応答なら既存ファイルを保持し、ログへ理由を出します。初回は ChSet なしでも WebUI を起動します。`make scan` で登録から再試行できます。ChSet 再取得だけ行う場合は `make edcb-chset` を使います。
 
-`make edcb-chset` は EDCB を停止し、一時コンテナで再取得・番号変換・既存ファイルの日時付きバックアップを行い、EDCB を再起動します。録画中は実行しないでください。取得失敗時も既存 ChSet を残して EDCB を再起動します。チャンネル追加・削除やスキャン後にも必要です。仮想番号が変わるため、再取得後は既存予約のチャンネルを確認してください。初回の EPG は次の定期取得、または WebUI の EPG 取得操作で読み込みます。recisdb の EPG DB を EDCB に直接コピーする処理ではありません。
+`make edcb-chset` は EDCB を停止し、一時コンテナで再取得・番号変換・既存ファイルの日時付きバックアップを行い、EDCB を再起動します。録画中は実行しないでください。取得失敗時も既存 ChSet を残して EDCB を再起動します。`make scan` は成功後にこの処理を呼び出します。仮想番号が変わるため、再取得後は既存予約のチャンネルを確認してください。初回の EPG は次の定期取得、または WebUI の EPG 取得操作で読み込みます。recisdb の EPG DB を EDCB に直接コピーする処理ではありません。
 
 根拠: recisdb [client_view.rs:34-123,244-290](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/api/client_view.rs#L244-L290)、[ChSet の列形式](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/channel_files.rs#L196-L259)、[token の保存](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/database/mod.rs#L2017-L2037)、EDCB [ChSet のファイル名](https://github.com/stuayu/EDCB/blob/my-build/BonCtrl/ChSetUtil.cpp#L16-L34)、上流 BonDriver [GetTunerName](https://github.com/matching/BonDriver_LinuxMirakc/blob/main/src/BonDriver_LinuxMirakc.cpp#L301-L311)。
 
@@ -624,7 +638,7 @@ Mac 上で shellcheck、bash 構文検査、`make test`、Compose YAML 読み込
 7. 必要な場合だけ詳細ポート設定を開き、EDCB 自動登録・エンコードと UID/GID を確認します。
 8. 全設定の確認画面でセットアップを承認します。
 9. ビルド・起動中は進捗画面を表示します。ログは `data/setup-logs/<日時>-build.log` / `-start.log` に保存し、失敗時にも場所を表示します。
-10. 完了画面で各 URL とチャンネルスキャン・録画確認の案内を確認します。EDCB は `http://<IP>:5510/E3/` です。
+10. 起動確認後に自動登録・スキャン・ChSet 反映・サービス更新を実行し、完了画面で各 URL と録画確認の案内を確認します。EDCB は `http://<IP>:5510/E3/` です。
 
 `./setup.sh --reconfigure` で現在の設定を初期値にして再選択できます。端末でない場合、`--yes`、画面ツールの導入を拒否した場合は従来の文字入力または既定値を使います。`--yes` は sudo 操作を承認しません。導入を含めて確認を省略する場合だけ `--auto-install` を明示します。このフラグは chown やサービス停止の確認も省略するため、表示される導入手順を事前に確認してください。
 

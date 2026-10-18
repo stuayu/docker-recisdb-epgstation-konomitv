@@ -7,7 +7,8 @@ web_listen = "0.0.0.0:40080"
 path = "/data/recisdb-proxy.db"
 
 [web]
-auth_enabled = true
+# アクセス元はファイアウォールで制限してください。認証を使う場合は true にし auth_token を設定。
+auth_enabled = false
 
 [mirakurun]
 enabled = true

@@ -59,6 +59,9 @@ for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (Fal
     if edcb:
         assert services['edcb']['build']['args']['EDCB_REF'] == 'my-build'
         assert services['edcb']['build']['args']['EDCB_WEBUI_REF'] == 'E3'
+        assert services['edcb']['environment']['RECISDB_CONFIG'] == '/recisdb-proxy.toml'
+        auth_config = next(v for v in services['edcb']['volumes'] if v['target'] == '/recisdb-proxy.toml')
+        assert auth_config['read_only']
         assert any(v['target'] == '/recorded' for v in services['edcb']['volumes'])
         assert services['edcb']['stop_grace_period'] == '50s'
     if https:
