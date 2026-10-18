@@ -462,8 +462,8 @@ if ((edcb_enabled && services_ready)); then
   if [[ -n $edcb_services ]]; then
     if [[ $edcb_services != *'<err>'* ]]; then
       ok 'EDCB の番組データを確認'
-    elif edcb_ctok_json=$("$docker_cmd" compose exec -T edcb curl -fsS --max-time 10 'http://127.0.0.1:5510/api/Common?ctok=Common&json=1' 2>/dev/null) \
-      && edcb_ctok=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Common", ""))' <<<"$edcb_ctok_json") \
+    elif edcb_ctok_json=$("$docker_cmd" compose exec -T edcb curl -fsS --max-time 10 'http://127.0.0.1:5510/api/Common?ctok=common&json=1' 2>/dev/null) \
+      && edcb_ctok=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("common", ""))' <<<"$edcb_ctok_json") \
       && [[ -n $edcb_ctok ]] \
       && edcb_epg_response=$("$docker_cmd" compose exec -T edcb curl -fsS --max-time 10 -X POST --data-urlencode "ctok=$edcb_ctok" --data-urlencode 'epgcap=y' 'http://127.0.0.1:5510/api/Common?json=1' 2>&1); then
       if python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("info") == "EPG取得を開始しました" else 1)' <<<"$edcb_epg_response"; then
