@@ -1,6 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
-runtime=${BONCAS_RUNTIME_SCRIPT:-/opt/boncasrelay/runtime.py}
+runtime=${BONCAS_RUNTIME_SCRIPT:-/usr/local/lib/boncasrelay/runtime.py}
+install -m 755 /usr/local/libexec/boncasrelay/boncasrelay /opt/boncasrelay/boncasrelay
 usb_snapshot(){ python3 "$runtime" readers; }
 monitor=1
 if [[ ! -d ${USB_DEV_ROOT:-/dev/bus/usb} ]]; then
@@ -16,7 +17,7 @@ for _ in {1..50}; do
   kill -0 "$pcsc_pid" 2>/dev/null || { wait "$pcsc_pid"; exit 1; }
   sleep 0.1
 done
-boncasrelay --config /run/boncasrelay.ini &
+/opt/boncasrelay/boncasrelay --config /run/boncasrelay.ini &
 relay_pid=$!
 # Host udev multicast is not guaranteed in a container network namespace.
 # Watch only CCID interfaces; unrelated USB changes must not interrupt decryption.

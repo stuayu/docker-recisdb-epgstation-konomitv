@@ -10,6 +10,7 @@ services:
     volumes:
       - /dev/bus/usb:/dev/bus/usb
       - ./config/boncasrelay:/config
+      - ./config/boncasrelay/runtime:/opt/boncasrelay
     device_cgroup_rules:
       - 'c 189:* rw'
     ports:
