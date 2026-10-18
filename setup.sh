@@ -21,10 +21,11 @@ usage() {
   --help             このヘルプ
 
 非対話環境変数: BONCAS_HOST, BONCAS_PORT, BONCAS_4K_SAME,
-RECORDED_DIR, GPU (none|intel|nvidia), DB (sqlite|mariadb),
+RECORDED_DIR, GPU (none|intel|nvidia),
 RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, HTTPS (yes|no),
 RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE,
-AMATSUKAZE (yes|no), AMATSUKAZE_WEBUI_PORT, RUN_UID, RUN_GID
+AMATSUKAZE (yes|no), AMATSUKAZE_WEBUI_PORT, RUN_UID, RUN_GID,
+EDCB (yes|no), EDCB_WEB_PORT, EDCB_HTTPS_PORT, EDCB_TUNER_COUNT
 EOF
 }
 while (($#)); do
@@ -50,6 +51,7 @@ case ${OS_OVERRIDE:-$(uname -s)} in Linux) ;; *) fail 'Linux 専用です (Docke
 (( EUID != 0 )) || fail 'root では実行できません。' '通常ユーザーで実行してください。sudo は必要な作業だけ個別に使います。'
 
 step 'OS・必要コマンド・容量を確認'
+command -v python3 >/dev/null || fail 'python3 がありません。' 'sudo apt install -y python3 を実行してください。'
 command -v git >/dev/null || fail 'git がありません。' 'Ubuntu/Debian: sudo apt update && sudo apt install -y git'
 docker_cmd=${DOCKER_BIN:-$(command -v docker || true)}
 if [[ -z $docker_cmd ]] && ((INSTALL_DOCKER)); then
@@ -121,9 +123,9 @@ ask '録画保存ディレクトリ' "${RECORDED_DIR:-$(get RECORDED_DIR ./data/
 mkdir -p "$recorded" || fail "録画先を作成できません: $recorded" '書き込み権限とパスを確認してください。'
 [[ -w $recorded ]] || fail "録画先へ書き込めません: $recorded" '所有者・グループ・権限を確認してください。'
 
-step 'GPU・DB・ポートを設定'
+step 'GPU・追加サービス・ポートを設定'
 gpu_default=none; [[ -d $DEV_DIR/dri ]] && gpu_default=intel; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1 && gpu_default=nvidia
-existing_compose=$(get COMPOSE_FILE compose.yaml:compose.tuners.yaml)
+existing_compose=$(get COMPOSE_FILE compose.yaml:compose.tuners.yaml:compose.https.yaml)
 https_default=no; [[ $existing_compose == *compose.https.yaml* ]] && https_default=yes
 [[ $existing_compose == *compose.intel.yaml* ]] && gpu_default=intel
 [[ $existing_compose == *compose.nvidia.yaml* ]] && gpu_default=nvidia
@@ -149,10 +151,6 @@ if [[ $gpu == nvidia ]]; then
     [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail 'NVIDIA runtime を確認できません。' 'Toolkit を導入・設定後に再実行してください。'
   fi
 fi
-db_default=$(get SETUP_DB sqlite)
-[[ $existing_compose == *compose.mariadb.yaml* || $(get COMPOSE_PROFILES '') == *mariadb* ]] && db_default=mariadb
-ask 'EPGStation DB (sqlite / mariadb)' "${DB:-$db_default}"; db=$REPLY
-[[ $db == sqlite || $db == mariadb ]] || fail 'DB の選択が不正です。' 'sqlite または mariadb を指定してください。'
 ask 'recisdb-proxy Web ポート' "${RECISDB_WEB_PORT:-$(get RECISDB_WEB_PORT 40080)}"; p1=$REPLY
 ask 'EPGStation ポート' "${EPGSTATION_PORT:-$(get EPGSTATION_PORT 8888)}"; p2=$REPLY
 ask 'KonomiTV ポート' "${KONOMITV_PORT:-$(get KONOMITV_PORT 7000)}"; p3=$REPLY
@@ -169,8 +167,23 @@ if ((amatsukaze_enabled)); then put SETUP_AMATSUKAZE yes; else put SETUP_AMATSUK
 amatsukaze_port=${AMATSUKAZE_WEBUI_PORT:-$(get AMATSUKAZE_WEBUI_PORT 32769)}
 if ((amatsukaze_enabled)); then
   ask 'Amatsukaze WebUI ポート' "$amatsukaze_port"; amatsukaze_port=$REPLY
+fi
+edcb_default=$(get SETUP_EDCB yes)
+ask 'EDCB を使いますか (既定: はい)' "${EDCB:-$edcb_default}"; edcb=$REPLY
+case $edcb in yes|はい|y) edcb_enabled=1; put SETUP_EDCB yes;; no|いいえ|n) edcb_enabled=0; put SETUP_EDCB no;; *) fail 'EDCB の選択が不正です。' 'yes または no を指定してください。';; esac
+edcb_port=${EDCB_WEB_PORT:-$(get EDCB_WEB_PORT 5510)}
+edcb_https_port=${EDCB_HTTPS_PORT:-$(get EDCB_HTTPS_PORT 8553)}
+edcb_count=${EDCB_TUNER_COUNT:-$(get EDCB_TUNER_COUNT 2)}
+if ((edcb_enabled)); then
+  ask 'EDCB Web ポート' "$edcb_port"; edcb_port=$REPLY
+  ask 'EDCB HTTPS ポート' "$edcb_https_port"; edcb_https_port=$REPLY
+  ask 'EDCB 仮想チューナー数 (1〜99)' "$edcb_count"; edcb_count=$REPLY
+  [[ $edcb_count =~ ^[1-9][0-9]?$ ]] || fail 'チューナー数が不正です。' '1〜99 を指定してください。'
+fi
+put EDCB_WEB_PORT "$edcb_port"; put EDCB_HTTPS_PORT "$edcb_https_port"; put EDCB_TUNER_COUNT "$edcb_count"
+if ((amatsukaze_enabled || edcb_enabled)); then
   uid_default=$(id -u); gid_default=$(id -g)
-  if [[ $(get SETUP_AMATSUKAZE '') == yes || $existing_compose == *compose.amatsukaze.yaml* ]]; then
+  if [[ $(get SETUP_AMATSUKAZE '') == yes || $(get SETUP_EDCB '') == yes || $existing_compose == *compose.amatsukaze.yaml* || $existing_compose == *compose.edcb.yaml* ]]; then
     uid_default=$(get RUN_UID "$uid_default"); gid_default=$(get RUN_GID "$gid_default")
   fi
   ask '録画・エンコードを実行する UID' "${RUN_UID:-$uid_default}"; run_uid=$REPLY
@@ -183,42 +196,64 @@ fi
 put AMATSUKAZE_WEBUI_PORT "$amatsukaze_port"
 
 relay_port=$port
-for port in "$p1" "$p2" "$p3" "$p4" "$p5" "$amatsukaze_port"; do
+for port in "$p1" "$p2" "$p3" "$p4" "$p5" "$amatsukaze_port" "$edcb_port" "$edcb_https_port"; do
   if [[ ! $port =~ ^[0-9]+$ ]] || ((port<=0 || port>=65536)); then fail 'ポート番号が不正です。' '1〜65535 の数字を指定してください。'; fi
 done
-compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; [[ $db == mariadb ]] && compose+=:compose.mariadb.yaml; ((https_enabled)) && compose+=:compose.https.yaml
+compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; ((https_enabled)) && compose+=:compose.https.yaml
 if ((amatsukaze_enabled)); then
   compose+=:compose.amatsukaze.yaml
   [[ $gpu == intel ]] && compose+=:compose.amatsukaze.intel.yaml
   [[ $gpu == nvidia ]] && compose+=:compose.amatsukaze.nvidia.yaml
+fi
+if ((edcb_enabled)); then
+  compose+=:compose.edcb.yaml
+  (( ! https_enabled )) || compose+=:compose.edcb.https.yaml
 fi
 # Correct the obsolete fork branch while preserving custom refs.
 if [[ $(get EPGSTATION_REF main) == master ]]; then put EPGSTATION_REF main; echo 'EPGSTATION_REF=master を main に更新します。'; fi
 put COMPOSE_FILE "$compose"; put BONCAS_B25_HOST "$host"; put BONCAS_B25_PORT "$relay_port"; put BONCAS_4K_HOST "$fourk"; put BONCAS_4K_PORT "$fourkport"
 put RECORDED_DIR "$recorded"; put RECISDB_WEB_PORT "$p1"; put EPGSTATION_PORT "$p2"; put KONOMITV_PORT "$p3"
 put RECISDB_HTTPS_PORT "$p4"; put EPGSTATION_HTTPS_PORT "$p5"; put AKEBI_KEYLESS_SERVER_URL "${AKEBI_KEYLESS_SERVER_URL:-$(get AKEBI_KEYLESS_SERVER_URL https://akebi.konomi.tv/)}"
-if [[ $db == mariadb ]]; then put COMPOSE_PROFILES mariadb; else put COMPOSE_PROFILES ''; fi
+# Retire only the old DB selector; preserve unrelated profiles.
+profiles=$(get COMPOSE_PROFILES '')
+profiles=$(printf '%s' "$profiles" | tr ',' '\n' | sed '/^mariadb$/d' | paste -sd, -)
+put COMPOSE_PROFILES "$profiles"
 video_gid=''
 if [[ $gpu == intel ]]; then video_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true); fi
 [[ -n $video_gid ]] || video_gid=$(getent group video 2>/dev/null | awk -F: '{print $3}' || true)
 if [[ -z $video_gid && $gpu == intel && -n ${render_node:-} ]]; then video_gid=$(stat -c '%g' "$render_node" 2>/dev/null || true); fi
 put VIDEO_GID "${video_gid:-44}"
-put SETUP_DB "$db"
-if [[ $db == mariadb ]]; then
-  mariadb_password=$(get MARIADB_PASSWORD ''); root_password=$(get MARIADB_ROOT_PASSWORD '')
-  [[ -n $mariadb_password && $mariadb_password != change-me ]] || mariadb_password=$(openssl rand -hex 24)
-  [[ -n $root_password && $root_password != change-me-too ]] || root_password=$(openssl rand -hex 24)
-  put MARIADB_PASSWORD "$mariadb_password"; put MARIADB_ROOT_PASSWORD "$root_password"
-fi
+command -v openssl >/dev/null || fail 'openssl がありません。' 'sudo apt install -y openssl を実行してください。'
+mariadb_password=$(get MARIADB_PASSWORD ''); root_password=$(get MARIADB_ROOT_PASSWORD '')
+[[ -n $mariadb_password && $mariadb_password != change-me ]] || mariadb_password=$(openssl rand -hex 24)
+[[ -n $root_password && $root_password != change-me-too ]] || root_password=$(openssl rand -hex 24)
+put MARIADB_PASSWORD "$mariadb_password"; put MARIADB_ROOT_PASSWORD "$root_password"
 
 step '環境設定・ディレクトリ・チューナー Compose を生成'
 if [[ ! -f $ENV_FILE ]]; then cp .env.example "$ENV_FILE"; fi
 if [[ -s $SETTINGS_FILE ]]; then
-  if [[ -f $ENV_FILE ]]; then stamp=$(date +%Y%m%d%H%M%S%N); cp -p "$ENV_FILE" "$ENV_FILE.bak.$stamp"; fi
-  tmp=$(mktemp); cp "$ENV_FILE" "$tmp"
-  while IFS='=' read -r key value; do if grep -q "^${key}=" "$tmp"; then awk -v key="$key" -v value="$value" 'BEGIN{FS=OFS="="} $1==key {$0=key OFS value} {print}' "$tmp" > "$tmp.next"; mv "$tmp.next" "$tmp"; else printf '%s=%s\n' "$key" "$value" >> "$tmp"; fi; done < "$SETTINGS_FILE"
+  if [[ -f $ENV_FILE ]]; then stamp=$(date +%Y%m%d%H%M%S%N); cp -p "$ENV_FILE" "$ENV_FILE.bak.$stamp"; chmod 600 "$ENV_FILE.bak.$stamp"; fi
+  tmp=$(mktemp)
+  sed '/^SETUP_DB=/d' "$ENV_FILE" > "$tmp"
+  python3 - "$tmp" "$SETTINGS_FILE" <<'PYENV'
+from pathlib import Path
+import sys
+path, settings = map(Path, sys.argv[1:])
+updates = dict(line.split('=', 1) for line in settings.read_text().splitlines())
+lines = []
+for line in path.read_text().splitlines():
+    key = line.split('=', 1)[0]
+    if key in updates:
+        line = key + '=' + updates[key]
+    lines.append(line)
+seen = {line.split('=', 1)[0] for line in lines}
+lines.extend(key + '=' + value for key, value in updates.items() if key not in seen)
+path.write_text('\n'.join(lines) + '\n')
+PYENV
   mv "$tmp" "$ENV_FILE"
 fi
+chmod 600 "$ENV_FILE"
+if ((edcb_enabled)); then mkdir -p data/edcb "$recorded/edcb"; fi
 mkdir -p data/recisdb data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
 if ((amatsukaze_enabled)); then
   for dir in avs bat config data drcs JL logo profile input output; do mkdir -p "data/amatsukaze/$dir"; done
@@ -253,11 +288,11 @@ deadline=$((SECONDS+180)); services_ready=0; http_ready=0
 konomi_host=${ipaddr//./-}.local.konomi.tv
 while ((SECONDS<deadline)); do
   running_services=$("$docker_cmd" compose ps --status running --services 2>/dev/null || true)
-  if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services" && { (( ! amatsukaze_enabled )) || grep -qx amatsukaze <<<"$running_services"; }; then
+  if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services" && { (( ! amatsukaze_enabled )) || grep -qx amatsukaze <<<"$running_services"; } && { (( ! edcb_enabled )) || grep -qx edcb <<<"$running_services"; }; then
     services_ready=1
     if command -v curl >/dev/null 2>&1; then
       if curl -fsS --max-time 3 "http://127.0.0.1:$p1/mirakurun/api/status" >/dev/null 2>&1 && curl -fsS --max-time 3 "http://127.0.0.1:$p2/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p3:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p3/" >/dev/null 2>&1; then
-        if { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
+        if { (( ! edcb_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$edcb_port/" >/dev/null 2>&1; } && { (( ! edcb_enabled || ! https_enabled )) || curl --resolve "$konomi_host:$edcb_https_port:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$edcb_https_port/" >/dev/null 2>&1; } && { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
       fi
     else printf 'curl がないため HTTP 応答確認を省略します。必要なら curl を導入して再確認してください。\n'; http_ready=1; break; fi
   fi
@@ -268,6 +303,11 @@ step 'アクセス先と次の作業'
 printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
 if ((amatsukaze_enabled)); then printf 'Amatsukaze WebUI: http://%s:%s/\n' "$ipaddr" "$amatsukaze_port"; fi
 if ((https_enabled)); then printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStation HTTPS: https://%s:%s/\n' "$konomi_host" "$p4" "$konomi_host" "$p5"; fi
+if ((edcb_enabled)); then
+  printf 'EDCB WebUI: http://%s:%s/EMWUI/\n' "$ipaddr" "$edcb_port"
+  if ((https_enabled)); then printf 'EDCB HTTPS: https://%s:%s/EMWUI/\n' "$konomi_host" "$edcb_https_port"; fi
+  echo 'recisdb-proxy のチャンネルスキャン後、make edcb-chset で EDCB に反映してください。'
+fi
 printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n'
 token=$("$docker_cmd" compose logs --no-color recisdb-proxy 2>/dev/null | sed -n 's/.*Web API auth token: *//p' | tail -n1 || true)
 [[ -z $token ]] || printf '初回ダッシュボード token: %s\n' "$token"

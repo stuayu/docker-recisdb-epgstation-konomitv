@@ -41,17 +41,15 @@ mirakurunPath: http://recisdb-proxy:40080/mirakurun/
 # isAllowAllCORS: false
 
 # ===== データベース =====
-# 保存先 DB の種類。既定は sqlite。追加の DB サーバーが不要なので初めて使う場合はこのままでよい。
-dbtype: sqlite
-# MariaDB profile uses compose.mariadb.yaml and this MySQL configuration instead.
-# dbtype: mysql
-# mysql:
-#     host: mariadb
-#     port: 3306
-#     user: epgstation
-#     password: ${MARIADB_PASSWORD}
-#     database: epgstation
-#     charset: utf8mb4
+# MariaDB は標準サービス。接続設定は起動時に自動投入。
+dbtype: mysql
+mysql:
+    host: mariadb
+    port: 3306
+    user: epgstation
+    password: ${MARIADB_PASSWORD_YAML}
+    database: epgstation
+    charset: utf8mb4
 
 # PostgreSQL は現行ビルドでは使えない。
 # dbtype: postgres

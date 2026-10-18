@@ -15,6 +15,9 @@ flowchart LR
     relay <-->|BonCasLink 互換| proxy
     proxy --> epg[EPGStation :8888]
     proxy --> tv[KonomiTV HTTPS :7000]
+    proxy --> edcb[EDCB 任意 / WebUI :5510]
+    epg --> db[MariaDB 標準 :3306]
+    edcb --> edcbrec[/recorded/edcb]
     epg -->|AddTask / TCP :32768| ama[Amatsukaze 任意 / WebUI :32769]
     recordings[共有 /recorded] <--> epg
     recordings <--> ama
@@ -246,10 +249,10 @@ docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 
 #### 録画ホストのファイアウォール
 
-Compose は HTTP 40080 / 8888、HTTPS 40443 / 8443、KonomiTV 7000 を全ホストアドレスへ publish します。Docker 公開 port は UFW の通常 INPUT ルールを迂回するため、UFW の allow/deny だけで制限できるとは限りません。まずルーター/VLAN ACL で LAN からだけ許可してください。ホストの iptables backend を使う場合は Docker の `DOCKER-USER` chain を使います。次は `eno1` を実際の外向き NIC、CIDR を実 LAN に置き換える例です。
+Compose は HTTP 40080 / 8888、HTTPS 40443 / 8443、KonomiTV 7000、EDCB 有効時は HTTP 5510 / HTTPS 8553 を全ホストアドレスへ publish します。Docker 公開 port は UFW の通常 INPUT ルールを迂回するため、UFW の allow/deny だけで制限できるとは限りません。まずルーター/VLAN ACL で LAN からだけ許可してください。ホストの iptables backend を使う場合は Docker の `DOCKER-USER` chain を使います。次は `eno1` を実際の外向き NIC、CIDR を実 LAN に置き換える例です。
 
 ```bash
-for port in 40080 8888 40443 8443 7000; do
+for port in 40080 8888 40443 8443 7000 5510 8553; do
   sudo iptables -I DOCKER-USER -i eno1 -p tcp -m conntrack --ctorigdstport "$port" ! -s 192.168.1.0/24 -j DROP
 done
 ```
@@ -265,6 +268,8 @@ HTTP 直通は従来どおり使えます。HTTPS 経路を有効にすると、
 | --- | --- | --- |
 | recisdb-proxy | `http://<録画ホストIP>:40080/` | `https://<IPをハイフン区切り>.local.konomi.tv:40443/` |
 | EPGStation | `http://<録画ホストIP>:8888/` | `https://<IPをハイフン区切り>.local.konomi.tv:8443/` |
+| EDCB (任意) | `http://<録画ホストIP>:5510/EMWUI/` | `https://<IPをハイフン区切り>.local.konomi.tv:8553/EMWUI/` |
+| MariaDB | Compose 内 `mariadb:3306` のみ | 対象外 |
 | Amatsukaze (任意) | `http://<録画ホストIP>:32769/` | 対象外 |
 | KonomiTV | 対象外 | `https://<IPをハイフン区切り>.local.konomi.tv:7000/` |
 
@@ -286,21 +291,21 @@ cd docker-recisdb-epgstation-konomitv
 ./setup.sh
 ```
 
-質問には既定値が表示されます。BonCasRelay のホスト名/IP、録画先、GPU、DB、Amatsukaze の利用を選びます。通常の初回構成では Enter で進められます。チューナーが未検出でも続行でき、ドライバー導入後に `make tuners` を実行できます。ビルドと起動を含めず設定だけ行う場合は `./setup.sh --reconfigure` を使います。
+質問には既定値が表示されます。BonCasRelay のホスト名/IP、録画先、GPU、EDCB、Amatsukaze の利用を選びます。通常の初回構成では Enter で進められます。チューナーが未検出でも続行でき、ドライバー導入後に `make tuners` を実行できます。ビルドと起動を含めず設定だけ行う場合は `./setup.sh --reconfigure` を使います。
 
 ### 2. ブラウザーで初期設定
 
 1. recisdb-proxy は `http://<録画ホストIP>:40080/` または HTTPS 有効時の `https://<IPをハイフン区切り>.local.konomi.tv:40443/` を開きます。初回 token は `docker compose logs recisdb-proxy` の `Web API auth token:` 行です。セットアップがログから表示できた場合はその token を使ってください。
 2. recisdb-proxy の「BonDriver」画面で検出されたチューナーデバイスを登録し、チャンネルスキャンを実行します。チューナーパスは `/dev/px4video0` など実在する名前を使います。
 3. EPGStation は `http://<録画ホストIP>:8888/` または HTTPS 有効時の `https://<IPをハイフン区切り>.local.konomi.tv:8443/` を開き、番組表から予約します。EPGStation の Mirakurun 接続先は内部ネットワーク上の `http://recisdb-proxy:40080/mirakurun/` です。
-4. KonomiTV (`https://<IPのドットをハイフンに変換>.local.konomi.tv:7000/`) を開いて初期設定し、チャンネル一覧からライブ視聴します。例: IP が `192.168.1.20` なら `https://192-168-1-20.local.konomi.tv:7000/`。KonomiTV は Akebi による HTTPS が必要で、IP のドットをハイフンにした `*.local.konomi.tv` が正規 URL です。DNS Rebinding Protection が有効なルーターでは名前解決を止められることがあります。その場合はルーターの保護設定を調整するか、公開 DNS を使います。初回起動には外部 DNS / Keyless サーバーとの通信も必要です。KonomiTV の URL 仕様と DNS 問題は [KonomiTV README](https://github.com/stuayu/KonomiTV#httpsaa-bb-cc-ddlocalkonomitv7000-の-url-について)を参照してください。KonomiTV の Mirakurun backend は予約録画に対応しないため、予約は EPGStation を使います。
-5. 地デジ/BS のスクランブル放送で B25 復号、実際の予約録画と再生を確認します。4K は ACAS 対応構成と dantto4k が別途必要です。
+4. KonomiTV (`https://<IPのドットをハイフンに変換>.local.konomi.tv:7000/`) を開いて初期設定し、チャンネル一覧からライブ視聴します。例: IP が `192.168.1.20` なら `https://192-168-1-20.local.konomi.tv:7000/`。KonomiTV は Akebi による HTTPS が必要で、IP のドットをハイフンにした `*.local.konomi.tv` が正規 URL です。DNS Rebinding Protection が有効なルーターでは名前解決を止められることがあります。その場合はルーターの保護設定を調整するか、公開 DNS を使います。初回起動には外部 DNS / Keyless サーバーとの通信も必要です。KonomiTV の URL 仕様と DNS 問題は [KonomiTV README](https://github.com/stuayu/KonomiTV#httpsaa-bb-cc-ddlocalkonomitv7000-の-url-について)を参照してください。KonomiTV の Mirakurun backend は予約録画に対応しないため、予約は EPGStation または EDCB を使います。
+5. EDCB 有効時は recisdb-proxy のスキャン完了後に `make edcb-chset` を実行し、`http://<録画ホストIP>:5510/EMWUI/` を開きます。EDCB 自身によるチャンネルスキャンや接続設定の手編集は不要です。
+6. 地デジ/BS のスクランブル放送で B25 復号、実際の予約録画と再生を確認します。4K は ACAS 対応構成と dantto4k が別途必要です。
 
 ## 手動セットアップ (経験者向け)
 
 ```bash
-cp .env.example .env
-make config
+./setup.sh --reconfigure
 make tuners
 ```
 
@@ -313,9 +318,9 @@ docker compose up -d
 docker compose logs -f recisdb-proxy
 ```
 
-`.env` の `COMPOSE_FILE` は Compose ファイルのコロン区切りです。標準は `compose.yaml:compose.tuners.yaml`。Intel は `:compose.intel.yaml`、NVIDIA は `:compose.nvidia.yaml`、MariaDB は `:compose.mariadb.yaml` を加えます。NVIDIA には NVIDIA Container Toolkit が必要です。MariaDB 利用時は `.env` に強い `MARIADB_PASSWORD` と `MARIADB_ROOT_PASSWORD` を設定し、`COMPOSE_PROFILES=mariadb` を有効にします。セットアップでは profile を設定し、パスワードを自動生成します。
+`.env` の `COMPOSE_FILE` は Compose ファイルのコロン区切りです。標準は `compose.yaml:compose.tuners.yaml`。Intel は `:compose.intel.yaml`、NVIDIA は `:compose.nvidia.yaml`、EDCB は `:compose.edcb.yaml` を加えます。EDCB と HTTPS を併用するときは末尾に `:compose.edcb.https.yaml` も加えます。NVIDIA には NVIDIA Container Toolkit が必要です。MariaDB は標準で起動し、setup.sh がパスワードを自動生成します。
 
-既定 DB は SQLite です。MariaDB では `config/config.mariadb.yml.example` が使われます。設定テンプレートは `config/` にあります。recisdb-proxy の起動時に BonCasLink 設定を `/data/recisdb-proxy.toml` に生成します。`BONCAS_B25_HOST` は必須で、`BONCAS_4K_HOST` が空なら 4K 設定を生成しません。
+EPGStation の DB は MariaDB 固定です。`config/config.yml.example` が使われます。設定テンプレートは `config/` にあります。recisdb-proxy の起動時に BonCasLink 設定を `/data/recisdb-proxy.toml` に生成します。`BONCAS_B25_HOST` は必須で、`BONCAS_4K_HOST` が空なら 4K 設定を生成しません。
 
 ## 日々の操作
 
@@ -327,6 +332,7 @@ docker compose logs -f recisdb-proxy
 | 停止 | `make down` |
 | ログ | `make logs` または `docker compose logs -f recisdb-proxy` |
 | チューナー再検出 | `make tuners` |
+| EDCB チャンネル再取得 | `make edcb-chset` (EDCB の録画がないとき) |
 | 再ビルド | `make build` |
 | ソース更新・再ビルド・再起動 | `make update` |
 | 設定・テスト | `make config` / `make test` |
@@ -356,10 +362,11 @@ BonCasLink 互換通信は平文・無認証です。BonCasRelay は信頼でき
 
 | ファイル | 役割 |
 | --- | --- |
-| `compose.yaml` | recisdb-proxy、EPGStation、KonomiTV、任意の MariaDB サービス |
+| `compose.yaml` | recisdb-proxy、EPGStation、KonomiTV、標準の MariaDB サービス |
 | `compose.tuners.yaml` | `make tuners` / setup が `/dev` から生成するチューナー公開設定 |
 | `compose.intel.yaml` / `compose.nvidia.yaml` | KonomiTV コンテナへの GPU デバイス設定 |
-| `compose.mariadb.yaml` | EPGStation の MariaDB profile 設定 |
+| `compose.edcb.yaml` | 任意の EDCB と Material WebUI |
+| `compose.edcb.https.yaml` | EDCB と HTTPS の両方が有効な場合の Akebi 経路 |
 | `compose.amatsukaze.yaml` | 任意の Amatsukaze と EPGStation 連携設定 |
 | `compose.amatsukaze.intel.yaml` / `compose.amatsukaze.nvidia.yaml` | Amatsukaze 有効時専用の GPU 設定 |
 | `compose.https.yaml` | 任意の Akebi HTTPS gateway |
@@ -370,7 +377,7 @@ BonCasLink 互換通信は平文・無認証です。BonCasRelay は信頼でき
 | `docker/` | 各コンテナの Dockerfile と起動処理 |
 | `data/` | DB、ログ、サムネイル、一時ファイル、録画の永続保存先 |
 
-Compose では `data/recisdb` に recisdb-proxy DB/ログ、`data/epgstation` に EPGStation DB/一時ファイル、`data/epgstation-logs` にログ、`data/epgstation-thumbnail` にサムネイル、`data/epgstation-drop` に drop ログ、録画先に録画ファイルを保存します。KonomiTV DB/ログは `data/konomitv` / `data/konomitv-logs` です。
+Compose では `data/recisdb` に recisdb-proxy DB/ログ、`data/epgstation` に EPGStation の鍵・一時ファイル、`data/mariadb` に EPGStation DB、`data/epgstation-logs` にログ、`data/epgstation-thumbnail` にサムネイル、`data/epgstation-drop` に drop ログ、録画先に録画ファイルを保存します。KonomiTV DB/ログは `data/konomitv` / `data/konomitv-logs` です。
 
 KonomiTV は bridge ネットワーク上で稼働し、Mirakurun 接続先は Compose DNS 名 `recisdb-proxy` です。ホスト公開ポート `${KONOMITV_PORT}:7000` がブラウザーからの入口です。録画ディレクトリはコンテナ内 `/host-rootfs/recorded` に読み取り専用で割り当てます。
 
@@ -398,7 +405,7 @@ GPU 利用時も初期プロファイルは x264 のままです。Intel/AMD は
 
 ### 自動生成する EPGStation 設定
 
-SQLite / MariaDB の両テンプレートを同じ entrypoint で展開し、有効時だけ次を挿入します。既存の H.264 プリセットも残ります。
+MariaDB 用テンプレートを entrypoint で展開し、有効時だけ次を挿入します。既存の H.264 プリセットも残ります。
 
 ```yaml
 amatsukaze:
@@ -458,7 +465,7 @@ services:
       - "32768:32768"
 ```
 
-WebUI は `AMATSUKAZE_WEBUI_PORT` (既定 32769) で公開します。今回の HTTPS gateway には追加していません。任意サービスの依存関係を既存 gateway へ持ち込まず、既存の 2 経路を維持するためです。必要なら専用 gateway override で HTTP 転送を追加してください。WebUI / TCP は信頼できる LAN/VPN 内に限定し、公開ポートのファイアウォール設定にも 32769 (必要時 32768) を加えます。
+WebUI は `AMATSUKAZE_WEBUI_PORT` (既定 32769) で公開します。今回の HTTPS gateway には追加していません。任意サービスの依存関係を既存 gateway へ持ち込まず、Amatsukaze の経路を標準では追加しないためです。必要なら専用 gateway override で HTTP 転送を追加してください。WebUI / TCP は信頼できる LAN/VPN 内に限定し、公開ポートのファイアウォール設定にも 32769 (必要時 32768) を加えます。
 
 ### Amatsukaze のトラブルシュート
 
@@ -473,3 +480,82 @@ WebUI は `AMATSUKAZE_WEBUI_PORT` (既定 32769) で公開します。今回の 
 | GPU が使われない | 専用 GPU override、ホストのドライバーと Toolkit、WebUI のプロファイルのエンコーダー選択を確認。初期値は x264 |
 
 根拠: [ProfileSetting と出力マスク](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/AmatsukazeServer/Server/EncodeServerData.cs)、[局別 CM 解析・ロゴ消しの適用](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/AmatsukazeServer/Server/TranscodeWorker.cs)、[上流既定プロファイル](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/defaults/profile/デフォルト.profile)、[Linux インストール](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/doc/InstallLinux.md)、[EPGStation 連携コマンド](https://github.com/stuayu/EPGStation/blob/main/src/AmatsukazeEncodeTool.ts)、[パス変換](https://github.com/stuayu/EPGStation/blob/main/src/model/amatsukaze/AmatsukazeConfigResolver.ts)。
+
+
+## EPGStation の DB (MariaDB 固定)
+
+`compose.yaml` に `mariadb:latest` を標準サービスとして定義しています。SQLite の選択肢・DB 用 override・profile はありません。`./setup.sh --reconfigure` でも空またはサンプル値のパスワードを 24 バイトの乱数 (48 桁の hex) に置き換え、`.env` に保存します。設定済みの値は維持します。`.env` は mode 600 で保存します。以前の `COMPOSE_FILE` にあった DB 用 override と `COMPOSE_PROFILES` の `mariadb` は setup.sh の再実行で除去します。
+
+接続設定は `dbtype: mysql`、`host: mariadb`、`port: 3306`、`user/database: epgstation`、`charset: utf8mb4` です。entrypoint が `.env` の `MARIADB_PASSWORD` を YAML 文字列として安全に投入し、MariaDB の `healthcheck.sh --connect --innodb_initialized` 成功後に EPGStation を起動します。サーバーも `utf8mb4` / `utf8mb4_general_ci` を明示します。根拠: EPGStation フォークの [IConfigFile.ts:297-304](https://github.com/stuayu/EPGStation/blob/main/src/model/IConfigFile.ts#L297-L304)、[ConfigSchema.ts:1060-1080](https://github.com/stuayu/EPGStation/blob/main/src/model/config/ConfigSchema.ts#L1060-L1080)、[DBOperator.ts:67-86](https://github.com/stuayu/EPGStation/blob/main/src/model/db/DBOperator.ts#L67-L86)、[ormconfig.js:34-42](https://github.com/stuayu/EPGStation/blob/main/ormconfig.js#L34-L42)、[MariaDB の作成例](https://github.com/stuayu/EPGStation/blob/main/doc/windows-setup.md#L292-L299)。MySQL 専用の `utf8mb4_0900_as_ci` は採用していません。
+
+`MARIADB_AUTO_UPGRADE=1` は、起動時に必要性を判定して `mariadb-upgrade` を実行する公式イメージの機能です。システム DB のバックアップ `system_mysql_backup_*.sql.zst` も既定で作成されます。これは利用者 DB 全体のバックアップではないため、メジャー更新前は録画予約 DB を別途バックアップしてください。既存データ領域のパスワードは環境変数の変更だけでは更新されません。[公式環境変数仕様](https://mariadb.com/docs/server/server-management/automated-mariadb-deployment-and-administration/docker-and-mariadb/mariadb-server-docker-official-image-environment-variables)
+
+以前 SQLite で動かしていた場合、既存の予約・履歴は自動移行されず、新しい MariaDB で開始します。SQLite ファイルは削除しません。
+
+## EDCB と Material WebUI (任意、初回既定ではい)
+
+`./setup.sh` が選択・ポート・実行 UID/GID・仮想チューナー数を設定します。非対話では `EDCB=yes ./setup.sh --yes`、無効にする場合は `EDCB=no ./setup.sh --yes` を指定します。選択は `SETUP_EDCB` に保存します。設定だけなら `--reconfigure` を付け、`make build && make up` で反映します。EDCB 無効時は EDCB 用サービス・HTTPS 経路を読み込みません。KonomiTV のバックエンドは引き続き recisdb-proxy の Mirakurun 互換 API です。
+
+EDCB `my-build` を Debian bookworm で `make -C Document/Unix` / `install_u` によりビルドします。Lua は Debian の `liblua5.2-dev` / `lua-zlib` を利用します。Material WebUI は利用者フォークの `dev` ブランチから `HttpPublic` と `Setting` を組み込みます。ソースは Docker ビルド時に取得し、このリポジトリには複製しません。EpgTimerSrv はコンテナ内でフォアグラウンド常駐し、tini と `restart: unless-stopped` が管理します。systemd は不要です。停止猶予は上流の unit 例に合わせて 50 秒です。根拠: [HowToBuild.txt の Linux 節](https://github.com/stuayu/EDCB/blob/my-build/Document/HowToBuild.txt#L104-L200)、[Unix/Makefile](https://github.com/stuayu/EDCB/blob/my-build/Document/Unix/Makefile)、[WebUI の配置](https://github.com/stuayu/EDCB_Material_WebUI/blob/dev/README.md#導入)。
+
+### チューナー接続方式の比較
+
+| 方式 | 確認結果 | 判断 |
+| --- | --- | --- |
+| (A) bondriver-proxy-client → TCP 40070 | Linux ターゲットの `cargo check` と `.so` クロスビルドは成功。ただし Rust の手製 vtable は Linux EDCB の C++ RTTI と非互換。`CreateBonStruct` は未実装 | 現時点では不採用。BNDP 固有の優先度・排他制御を直接扱える将来案 |
+| (B) BonDriver_LinuxMirakc → HTTP 40080 | `/mirakurun/api/services` と `/mirakurun/api/services/:id/stream` が実装済み。サービスストリームは `X-Mirakurun-Priority` を録画クラス・競合優先度に反映 | 今回採用。ビルド時に下記の互換補正を適用 |
+
+(A) の障害は `extern "system"` や UTF-16 という名前だけで判断したものではありません。EDCB は `dlopen` / `dlsym` でロードし、`CreateBonStruct` があれば C 構造体アダプターを使い、なければ `CreateBonDriver` の戻り値に `dynamic_cast<IBonDriver2*>` を使います。EDCB の文字列自体は Linux でも `BON16CHAR` (16 bit) であり、UTF-16 は問題ではありません。Rust 側は非 Windows でもコンパイル可能ですが、Linux 向け RTTI メタデータを持つ C++ オブジェクトではありません。根拠: EDCB [BonDriverUtil.cpp:178-202](https://github.com/stuayu/EDCB/blob/my-build/BonCtrl/BonDriverUtil.cpp#L178-L202)、[IBonDriver2.h:15-75](https://github.com/stuayu/EDCB/blob/my-build/BonCtrl/IBonDriver2.h#L15-L75)、[PathUtil.cpp:367-386](https://github.com/stuayu/EDCB/blob/my-build/Common/PathUtil.cpp#L367-L386)、recisdb [interface.rs:1-20](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/bondriver-proxy-client/src/bondriver/interface.rs#L1-L20)。
+
+recisdb-proxy-rs 側に必要な改修は、Linux 向け `CreateBonStruct` / `STRUCT_IBONDRIVER2` の実装です。`pCtx`、`pEnd`、C ABI の関数ポインターを EDCB の定義に合わせ、`GetTsStream` のコピー版→ポインター版の順序も確認する必要があります。DLL パス検出の代わりに `.so` 隣接 INI の検出も必要です (現行の非 Windows 設定パスはカレントディレクトリ基準)。もう一案は C++ RTTI を持つラッパーですが、C 構造体エクスポートのほうがコンパイラー依存を避けられます。このリポジトリでは (A) を実装せず、recisdb-proxy-rs は変更していません。
+
+(B) の上流は `/api/` 固定・数値 IPv4 接続・`service.channel` がオブジェクトの想定です。この構成では `docker/edcb/patch-driver.py` がビルド中の外部ソースに対して `/mirakurun/api/`、URL バッファ拡張、`channel[0]`、DNS 解決、空間数 64、切断時の双方向 shutdown を補正します。想定とソースが変わればビルドを失敗させます。`SERVICE_SPLIT=1` を使う理由は、現行の channel-stream 経路は優先度ヘッダーを読まず視聴扱いになる一方、service-stream 経路はヘッダーを解釈するためです。サービス取得順とチューニング空間の切り替わり順を ChSet の変換でも再現します。
+
+根拠: [上流 BonDriver 本体](https://github.com/matching/BonDriver_LinuxMirakc/blob/main/src/BonDriver_LinuxMirakc.cpp#L405-L555)、[HTTP 接続](https://github.com/matching/BonDriver_LinuxMirakc/blob/main/src/http_proc.hpp#L87-L110)、recisdb [サービス定義](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/mirakurun.rs#L444-L478)、[service stream](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/mirakurun.rs#L1093-L1160)、[channel stream](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/mirakurun.rs#L1213-L1315)。
+
+### 自動生成する設定と保存先
+
+| ファイル / 項目 | 初期値 |
+| --- | --- |
+| `Common.ini` | `DataSavePath=/var/local/edcb/Setting`、`RecFolderNum=1`、`RecFolderPath0=/recorded/edcb` |
+| `EpgTimerSrv.ini [SET]` | `EnableHttpSrv=1`、`HttpPort=5510`、`HttpPublicFolder=/var/local/edcb/HttpPublic`、IPv4 loopback/RFC1918 LAN を許可、`EnableTCPSrv=0`、`RecEndMode=0` |
+| `[BonDriver_LinuxMirakc.so]` | `Count=EDCB_TUNER_COUNT` (既定 2)、`Priority=1` (EDCB 内部 ID)、`GetEpg=1`、`EPGCount=1` |
+| `[EPG_CAP]` | 毎日 06:00 / 18:00、両方有効 |
+| `[TVTEST]` | `Num=1`、`0=BonDriver_LinuxMirakc.so` |
+| `[REC_DEF]` | `RecMode=3` (指定サービスのみ・B25 処理なし) |
+| `EpgDataCap_Bon.ini [SET]` | `Scramble=0`、`EMM=0` |
+| `BonDriver_LinuxMirakc.so.ini [GLOBAL]` | `SERVER_HOST=recisdb-proxy`、`SERVER_PORT=40080`、`SERVER_TYPE=http`、`DECODE_B25=0`、`PRIORITY=2`、`SERVICE_SPLIT=1` |
+
+設定・予約・EPG・WebUI は `data/edcb` に永続化します。初回は欠けたファイルだけを配置し、以後 INI や ChSet を上書きしません。録画は共有 `RECORDED_DIR` の `edcb/` サブディレクトリに分け、EPGStation とファイル名が衝突しないようにします。EDCB は選択した UID/GID に権限を落として起動します。既存録画全体の所有者は変更しません。初回生成後に `.env` のチューナー数を変えても既存 INI は維持されます。再生成が必要な場合は EDCB を停止して対象 INI をバックアップ先へ退避し、再起動してください。予約ファイルのある `Setting` は維持してください。
+
+recisdb-proxy がサーバー側で復号し、互換 API の `decode` クエリ値は解釈されません。EDCB 側に B25 ライブラリーは導入せず、上記のアプリ設定と既定予約モードで CAS 処理を無効にします。WebUI で別の録画プリセットを追加する場合も「B25 処理なし」を選びます。根拠: recisdb [mirakurun.rs:1093-1108](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/mirakurun.rs#L1093-L1108)、EDCB [CommonDef.h:22-25](https://github.com/stuayu/EDCB/blob/my-build/Common/CommonDef.h#L22-L25)、[TunerBankCtrl.cpp:793-802](https://github.com/stuayu/EDCB/blob/my-build/EpgTimerSrv/EpgTimerSrv/TunerBankCtrl.cpp#L793-L802)、[AppSetting.cpp:37-40](https://github.com/stuayu/EDCB/blob/my-build/EpgDataCap_Bon/EpgDataCap_Bon/AppSetting.cpp#L37-L40)。
+
+その他の設定キーの根拠: EDCB [PathUtil.cpp:401-409,479以降](https://github.com/stuayu/EDCB/blob/my-build/Common/PathUtil.cpp#L401-L409)、[ReserveManager.cpp:24-47](https://github.com/stuayu/EDCB/blob/my-build/EpgTimerSrv/EpgTimerSrv/ReserveManager.cpp#L24-L47)、[EPG 時刻設定](https://github.com/stuayu/EDCB/blob/my-build/EpgTimerSrv/EpgTimerSrv/EpgTimerSrvSetting.cpp#L70-L105)、[HTTP 設定](https://github.com/stuayu/EDCB/blob/my-build/Document/Readme_Mod.txt#L848-L869)、[録画プリセット](https://github.com/stuayu/EDCB/blob/my-build/EpgTimerSrv/EpgTimerSrv/EpgTimerSrvMain.cpp#L3247-L3268)。
+
+### ChSet の自動投入・再取得
+
+1. 起動時に recisdb-proxy の永続 DB を読み取り専用で開き、`web_auth_config.auth_token` を取得します。利用者による token の転記は不要です。
+2. 認証付き `/api/client-view/targets` で登録済みドライバーを列挙し、`/api/client-view/files/chset4?tuner=...` と `chset5?tuner=...` を取得します。
+3. `/mirakurun/api/services` の順番に合わせて空間・チャンネル番号を変換し、サービスを統合します。`BonDriver_LinuxMirakc(LinuxMirakc).ChSet4.txt` と `ChSet5.txt` を `data/edcb/Setting` に UTF-8 BOM で保存します。BNDP 用の ChSet4 をそのまま置くことはできません。
+4. 未スキャン・認証失敗・不正応答なら既存ファイルを保持し、ログへ理由を出します。初回は ChSet なしでも WebUI を起動します。recisdb-proxy でスキャンを完了してから `make edcb-chset` を実行してください。
+
+`make edcb-chset` は EDCB を停止し、一時コンテナで再取得・番号変換・既存ファイルの日時付きバックアップを行い、EDCB を再起動します。録画中は実行しないでください。取得失敗時も既存 ChSet を残して EDCB を再起動します。チャンネル追加・削除やスキャン後にも必要です。仮想番号が変わるため、再取得後は既存予約のチャンネルを確認してください。初回の EPG は次の定期取得、または WebUI の EPG 取得操作で読み込みます。recisdb の EPG DB を EDCB に直接コピーする処理ではありません。
+
+根拠: recisdb [client_view.rs:34-123,244-290](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/api/client_view.rs#L244-L290)、[ChSet の列形式](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/channel_files.rs#L196-L259)、[token の保存](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/database/mod.rs#L2017-L2037)、EDCB [ChSet のファイル名](https://github.com/stuayu/EDCB/blob/my-build/BonCtrl/ChSetUtil.cpp#L16-L34)、上流 BonDriver [GetTunerName](https://github.com/matching/BonDriver_LinuxMirakc/blob/main/src/BonDriver_LinuxMirakc.cpp#L301-L311)。
+
+### ポート・併用・バージョン固定
+
+`.env` の `EDCB_WEB_PORT` (既定 5510) を内部 5510 へ、HTTPS 併用時は `EDCB_HTTPS_PORT` (既定 8553) を Akebi の内部 8553 へ公開します。EDCB の TCP 制御ポートは公開しません。EDCB の HTTP ACL は RFC1918 LAN を許可します。公開 IPv4 / IPv6 の直接アクセスは初期 ACL では対象外です。各 WebUI と同様、信頼できる LAN/VPN 内で使用してください。
+
+KonomiTV と EPGStation の接続先は変えません。全サービスのストリームは recisdb-proxy のチューナープールで調停されます。ただし各録画アプリの予約スケジューラーは独立しており、合計の同時録画・視聴が物理チューナー数を超えると確保失敗や視聴停止が起きます。LinuxMirakc の `PRIORITY=2` は EPG 取得にも適用され、BNDP のように操作ごとの優先度・排他フラグを指定する構成ではありません。短い予約録画と KonomiTV 同時視聴で確認してください。Material WebUI の基本の番組表・予約管理を対象とし、トランスコード配信の追加ツール・局ロゴ登録は上流の手順が別途必要です。
+
+ビルド引数は `.env` の `EDCB_REF=my-build`、`EDCB_WEBUI_REF=dev`、`EDCB_BONDRIVER_REF=main` から渡します。コミット固定する場合は各値を完全なコミット SHA に置き換え、`docker compose build --no-cache edcb` を実行します。ブランチ追従時の更新にも `--no-cache` が必要です (Docker はブランチ先端の変更だけではソース取得レイヤーを無効にしません)。上流ソース変更時は互換補正の検査が失敗することがあり、`patch-driver.py` の見直しが必要です。
+
+
+### この変更の検証範囲
+
+Mac 上で shellcheck、bash 構文検査、`make test`、Compose YAML 読み込み、Compose v2.39.4 の実際の `config` による 24 通り (EDCB × Amatsukaze × HTTPS × GPU 3 種) の構成検証を実施しました。`tests/compose_test.py` は `COMPOSE_BIN=/path/to/docker-compose python3 tests/compose_test.py` で再実行できます。
+
+生成した EPGStation config.yml はローカルフォークの実物の `IConfigFile.ts` に対して TypeScript の `Partial<IConfigFile>` で型照合し、`ConfigSchema.ts` の DB キーも確認しました。EDCB、Lua 5.2、両候補の BonDriver は x86_64 Linux ELF にクロスビルドしました。クロス環境では CC/CXX/LD/OBJCOPY を Linux 向けに指定し、古い sysroot 用に `-ldl -lrt` を明示しました。Dockerfile は bookworm の glibc と Debian 配布 Lua を使うため、このクロス環境向け補助指定は不要です。
+
+この Mac には Docker daemon がないため、bookworm イメージ全体のビルド・起動、MariaDB 実接続、EDCB WebUI の実応答、EPG 取得、実録画・復号・KonomiTV との同時利用、Akebi 経路は未検証です。Linux 録画ホストでこれらを確認してください。

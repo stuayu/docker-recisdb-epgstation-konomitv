@@ -1,0 +1,10 @@
+# Include only together with compose.edcb.yaml and compose.https.yaml.
+services:
+  https-gateway:
+    environment:
+      AKEBI_ROUTES: "40443=http://recisdb-proxy:40080/ 8443=http://epgstation:8888/ 8553=http://edcb:5510/"
+    depends_on:
+      edcb:
+        condition: service_healthy
+    ports:
+      - "${EDCB_HTTPS_PORT:-8553}:8553"

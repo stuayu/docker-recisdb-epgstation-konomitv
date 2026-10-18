@@ -2,6 +2,10 @@
 set -eu
 app_root=${EPGSTATION_APP_ROOT:-/app}
 template=${EPGSTATION_CONFIG_TEMPLATE:-/config-template/config.yml}
+# JSON strings are valid YAML scalars; preserve quotes, backslashes and punctuation.
+: "${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}"
+MARIADB_PASSWORD_YAML=$(node -e 'process.stdout.write(JSON.stringify(process.env.MARIADB_PASSWORD))')
+export MARIADB_PASSWORD_YAML
 AMATSUKAZE_ENCODE=''
 AMATSUKAZE_CONFIG=''
 if [ "${AMATSUKAZE_ENABLED:-0}" = 1 ]; then
@@ -28,7 +32,7 @@ export AMATSUKAZE_ENCODE AMATSUKAZE_CONFIG
 mkdir -p "$app_root/config"
 # Keep substitution restricted so EPGStation percent placeholders remain intact.
 # shellcheck disable=SC2016
-envsubst '${MARIADB_PASSWORD} ${AMATSUKAZE_ENCODE} ${AMATSUKAZE_CONFIG}' < "$template" > "$app_root/config/config.yml"
+envsubst '${MARIADB_PASSWORD_YAML} ${AMATSUKAZE_ENCODE} ${AMATSUKAZE_CONFIG}' < "$template" > "$app_root/config/config.yml"
 mkdir -p "$app_root/data/tmp" "$app_root/logs/Operator" "$app_root/logs/Service" "$app_root/logs/EPGUpdater"
 
 for name in operatorLogConfig serviceLogConfig epgUpdaterLogConfig; do

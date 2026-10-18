@@ -69,7 +69,8 @@ BonCasRelay は APDU から B-CAS / ACAS を自動判定し、既定ポート 69
 - カードサーバーは BonCasRelay。OS 不問 (Linux / macOS / Windows)。
 - B-CAS と ACAS は BonCasRelay の自動振り分けポート 6900 を共有。固定ポートを使う構成では各リーダー用ポートを指定し、`.env` の接続先も合わせる。
 - カードサーバーと録画サーバーが拠点をまたぐ場合は WireGuard / Tailscale 経由にする。
-- EPGStation の DB は既定 SQLite。MariaDB も選択可能。
+- EPGStation の DB は MariaDB 固定 (`mariadb:latest`)。接続・パスワード設定は自動化。
+- EDCB は任意サービスとして追加 (初回既定ではい)。BonDriver_LinuxMirakc 経由で recisdb-proxy に接続。実装・根拠・検証範囲は [README](../README.md#edcb-と-material-webui-任意初回既定ではい) を参照。
 - KonomiTV の GPU エンコードは Intel QSV / VAAPI / NVIDIA NVENC から選ぶ。
 
 ## 5. セキュリティ上の注意

@@ -39,8 +39,11 @@ services:
     environment:
       TZ: ${TZ}
       TMPDIR: /app/data/tmp
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Run setup.sh first}
     depends_on:
       recisdb-proxy:
+        condition: service_healthy
+      mariadb:
         condition: service_healthy
     volumes:
       - ./config/config.yml.example:/config-template/config.yml:ro
@@ -71,14 +74,15 @@ services:
       - "${KONOMITV_PORT}:7000"
 
   mariadb:
-    image: mariadb:11
-    profiles: [mariadb]
+    image: mariadb:latest
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_general_ci"]
     restart: unless-stopped
     environment:
+      MARIADB_AUTO_UPGRADE: "1"
       MARIADB_DATABASE: epgstation
       MARIADB_USER: epgstation
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Set MARIADB_PASSWORD in .env when using --profile mariadb}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Set MARIADB_ROOT_PASSWORD in .env when using --profile mariadb}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Run setup.sh first}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Run setup.sh first}
       TZ: ${TZ}
     volumes:
       - ./data/mariadb:/var/lib/mysql

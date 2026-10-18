@@ -22,7 +22,7 @@ case "$*" in
   'compose version'|'info'|'compose config') exit 0;;
   'info --format {{json .Runtimes}}') [[ ${NVIDIA_TOOLKIT_OK:-0} == 1 ]] && echo '{"nvidia":{}}';;
   'compose ps --format json') echo '[]';;
-  'compose ps --status running --services') printf 'recisdb-proxy\nepgstation\nkonomitv\namatsukaze\n';;
+  'compose ps --status running --services') printf 'recisdb-proxy\nepgstation\nkonomitv\namatsukaze\nedcb\n';;
   'compose logs --no-color recisdb-proxy') echo 'Web API auth token: test-token';;
 esac
 EOF
@@ -58,8 +58,8 @@ if [[ $1 == -brief ]]; then echo 'eno1 UP 192.168.1.30/24'; exit 0; fi
 exit 1
 EOF
 chmod +x "$TMP/bin/"*
-export AMATSUKAZE=no
-export PATH="$TMP/bin:/opt/homebrew/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" DEV_DIR="$TMP/dev" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
+export AMATSUKAZE=no EDCB=no
+export PATH="$TMP/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" DEV_DIR="$TMP/dev" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
 python3 -u -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); print(s.getsockname()[1],flush=True); exec("while True:\n c,_=s.accept(); c.close()")' > "$TMP/server-port" &
 SERVER_PID=$!
 disown "$SERVER_PID" 2>/dev/null || true
@@ -67,7 +67,7 @@ for _ in {1..50}; do [[ -s $TMP/server-port ]] && break; sleep 0.1; done
 SERVER_PORT=$(cat "$TMP/server-port")
 [[ $SERVER_PORT =~ ^[0-9]+$ ]] || fail 'temporary relay server did not start'
 
-run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU="${1:-none}" DB="${2:-sqlite}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
+run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU="${1:-none}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
 HTTPS=yes run_setup none >"$TMP/out"
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'default HTTPS COMPOSE_FILE'
 grep -q "^BONCAS_B25_PORT=$SERVER_PORT$" "$ENV_FILE" || fail 'relay port changed by WebUI port loop'
@@ -94,13 +94,16 @@ NVIDIA_OK=1 NVIDIA_TOOLKIT_OK=1 run_setup nvidia >"$TMP/out"
 grep -q ':compose.nvidia.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'NVIDIA COMPOSE_FILE'
 NVIDIA_OK=0 run_setup none >"$TMP/out"
 grep -q '^docker compose build$' "$DOCKER_CALLS" && fail 'no-build should skip build'
-run_setup none mariadb >"$TMP/out"
-grep -q ':compose.mariadb.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'MariaDB COMPOSE_FILE'
-grep -q ':compose.https.yaml$' "$ENV_FILE" || fail 'HTTPS compose lost with MariaDB'
-grep -q '^COMPOSE_PROFILES=mariadb$' "$ENV_FILE" || fail 'MariaDB profile not enabled'
-if grep -q '^MARIADB_PASSWORD=change-me$' "$ENV_FILE" || grep -q '^MARIADB_ROOT_PASSWORD=change-me-too$' "$ENV_FILE"; then fail 'MariaDB password was not generated'; fi
+password=$(sed -n 's/^MARIADB_PASSWORD=//p' "$ENV_FILE")
+root_password=$(sed -n 's/^MARIADB_ROOT_PASSWORD=//p' "$ENV_FILE")
+run_setup none >"$TMP/out"
+grep -q "^MARIADB_PASSWORD=$password$" "$ENV_FILE" || fail 'DB password not preserved'
+grep -q "^MARIADB_ROOT_PASSWORD=$root_password$" "$ENV_FILE" || fail 'root password not preserved'
+[[ $password =~ ^[a-f0-9]{48}$ && $root_password =~ ^[a-f0-9]{48}$ ]] || fail 'DB password generation'
+if grep '^COMPOSE_FILE=' "$ENV_FILE" | grep -q mariadb; then fail 'obsolete DB override'; fi
+if grep -q '^COMPOSE_PROFILES=mariadb$' "$ENV_FILE"; then fail 'obsolete DB profile'; fi
 
-(cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT=1 BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU=none DB=sqlite KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start) >"$TMP/failed" 2>&1 || true
+(cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT=1 BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU=none KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start) >"$TMP/failed" 2>&1 || true
 grep -q 'BonCasRelay に接続できません' "$TMP/failed" || fail 'unreachable relay explanation'
 if (cd "$TMP/repo" && SETUP_OS=Darwin ./setup.sh --help >/dev/null); then :; fi
 if (cd "$TMP/repo" && SETUP_OS=Darwin ./setup.sh --yes --no-build --no-start) >"$TMP/darwin" 2>&1; then fail 'Darwin should stop'; fi
@@ -108,7 +111,7 @@ grep -q 'Linux 専用' "$TMP/darwin" || fail 'Darwin explanation'
 
 export DEV_DIR="$TMP/empty-dev"; mkdir -p "$DEV_DIR"
 export DOCKER_CALLS="$TMP/docker2.calls"
-if (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT=6900 BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU=none DB=sqlite KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes) >"$TMP/full"; then :; else cat "$TMP/full" >&2; fail 'full stub setup'; fi
+if (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT=6900 BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU=none KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes) >"$TMP/full"; then :; else cat "$TMP/full" >&2; fail 'full stub setup'; fi
 grep -q '^compose build$' "$DOCKER_CALLS" || fail 'build args'
 grep -q '^compose up -d$' "$DOCKER_CALLS" || fail 'up args'
 grep -q '^compose config$' "$DOCKER_CALLS" || fail 'config args'
@@ -147,10 +150,38 @@ AMATSUKAZE=no run_setup none >"$TMP/out"
 (unset AMATSUKAZE; run_setup none >"$TMP/out")
 if grep '^COMPOSE_FILE=' "$ENV_FILE" | grep -q amatsukaze; then fail 'explicit no not preserved'; fi
 
-# Run the real entrypoint and real envsubst against both DB templates.
-for db in sqlite mariadb; do
-  template="$ROOT/config/config.yml.example"
-  [[ $db == sqlite ]] || template="$ROOT/config/config.mariadb.yml.example"
+# Reconfigure removes the legacy DB override/profile without rotating credentials.
+printf 'COMPOSE_FILE=compose.yaml:compose.mariadb.yaml\nCOMPOSE_PROFILES=mariadb,custom\nSETUP_DB=sqlite\n' >> "$ENV_FILE"
+HTTPS=yes run_setup none >"$TMP/out"
+grep -q '^COMPOSE_PROFILES=custom$' "$ENV_FILE" || fail 'custom profile not preserved'
+if grep -q '^SETUP_DB=' "$ENV_FILE"; then fail 'obsolete DB selector'; fi
+grep -q "^MARIADB_PASSWORD=$password$" "$ENV_FILE" || fail 'legacy migration rotated password'
+
+# EDCB combinations, default yes and saved opt-out; no real containers.
+EDCB=yes HTTPS=yes run_setup none >"$TMP/edcb.out"
+grep -q ':compose.edcb.yaml:compose.edcb.https.yaml$' "$ENV_FILE" || fail 'EDCB HTTPS overrides'
+grep -q '^EDCB_WEB_PORT=5510$' "$ENV_FILE" || fail 'EDCB HTTP port'
+EDCB=yes HTTPS=no AMATSUKAZE=yes run_setup none >"$TMP/edcb.out"
+grep -q ':compose.amatsukaze.yaml:compose.edcb.yaml$' "$ENV_FILE" || fail 'EDCB without HTTPS'
+EDCB=no HTTPS=yes run_setup none >"$TMP/out"
+(unset EDCB; run_setup none >"$TMP/out")
+if grep '^COMPOSE_FILE=' "$ENV_FILE" | grep -q edcb; then fail 'EDCB opt-out not preserved'; fi
+awk '!/^SETUP_EDCB=/' "$ENV_FILE" > "$ENV_FILE.next"; mv "$ENV_FILE.next" "$ENV_FILE"
+(unset EDCB; run_setup none >"$TMP/out")
+grep -q ':compose.edcb.yaml:compose.edcb.https.yaml$' "$ENV_FILE" || fail 'EDCB default yes'
+EDCB=yes EDCB_WEB_PORT=5520 EDCB_HTTPS_PORT=8554 run_setup none >"$TMP/out"
+grep -q '^EDCB_WEB_PORT=5520$' "$ENV_FILE" || fail 'custom EDCB port'
+if EDCB=yes EDCB_TUNER_COUNT=0 run_setup none >"$TMP/out" 2>&1; then fail 'invalid EDCB count'; fi
+EDCB=no run_setup none >"$TMP/out"
+
+(cd "$TMP/repo" && EDCB=yes HTTPS=yes EDCB_WEB_PORT=5510 EDCB_HTTPS_PORT=8553 BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU=none KONOMITV_SOURCE="$TMP/repo/konomitv" ./setup.sh --yes --no-build) >"$TMP/edcb-full"
+grep -q 'http://127.0.0.1:5510/' "$CURL_CALLS" || fail 'EDCB HTTP probe'
+grep -q 'https://192-168-1-30.local.konomi.tv:8553/' "$CURL_CALLS" || fail 'EDCB HTTPS probe'
+grep -q 'EDCB WebUI: http://192.168.1.30:5510/EMWUI/' "$TMP/edcb-full" || fail 'EDCB WebUI URL'
+
+# Run the real entrypoint and real envsubst against the standard DB template.
+db=mariadb
+template="$ROOT/config/config.yml.example"
   for enabled in 0 1; do
     app="$TMP/epg-$db-$enabled"
     mkdir -p "$app/config"
@@ -159,7 +190,7 @@ for db in sqlite mariadb; do
     ruby -ryaml - "$app/config/config.yml" "$enabled" "$db" <<'RUBY'
 config = YAML.load_file(ARGV[0])
 enabled = ARGV[1] == '1'
-abort 'wrong database' unless config['dbtype'] == (ARGV[2] == 'sqlite' ? 'sqlite' : 'mysql')
+abort 'wrong database' unless config['dbtype'] == 'mysql'
 abort 'password not substituted' if ARGV[2] == 'mariadb' && config['mysql']['password'] != 'test-password'
 presets = config.fetch('encode')
 abort 'existing H264 preset changed' unless presets.any? { |p| p['id'] == 'h264-720p' && p['cmd'].include?('%NODE%') }
@@ -174,7 +205,13 @@ else
 end
 RUBY
   done
-done
+
+# The entrypoint must preserve punctuation and backslashes in an existing password.
+# shellcheck disable=SC2016
+export MARIADB_PASSWORD='a:b #c"d\e $value'
+EPGSTATION_APP_ROOT="$TMP/epg-mariadb-0" EPGSTATION_CONFIG_TEMPLATE="$ROOT/config/config.yml.example" sh "$ROOT/docker/epgstation/entrypoint.sh" true
+ruby -ryaml -e 'abort "password quoting" unless YAML.load_file(ARGV[0])["mysql"]["password"] == ENV.fetch("MARIADB_PASSWORD")' "$TMP/epg-mariadb-0/config/config.yml"
+unset MARIADB_PASSWORD
 
 # Root bootstrap delegates to the selected numeric identity and only repairs application state.
 cat > "$TMP/bin/chown" <<'EOFCHOWN'
@@ -188,7 +225,7 @@ shift
 exec "$@"
 EOFGOSU
 chmod +x "$TMP/bin/chown" "$TMP/bin/gosu"
-IDENTITY_CALLS="$TMP/identity.calls" TEST_UID=0 EPGSTATION_APP_ROOT="$TMP/epg-sqlite-1" EPGSTATION_CONFIG_TEMPLATE="$ROOT/config/config.yml.example" AMATSUKAZE_ENABLED=1 RUN_UID=1234 RUN_GID=2345 sh "$ROOT/docker/epgstation/entrypoint.sh" true
+IDENTITY_CALLS="$TMP/identity.calls" TEST_UID=0 MARIADB_PASSWORD=test-password EPGSTATION_APP_ROOT="$TMP/epg-mariadb-1" EPGSTATION_CONFIG_TEMPLATE="$ROOT/config/config.yml.example" AMATSUKAZE_ENABLED=1 RUN_UID=1234 RUN_GID=2345 sh "$ROOT/docker/epgstation/entrypoint.sh" true
 grep -q 'gosu 1234:2345 true' "$TMP/identity.calls" || fail 'EPGStation identity drop'
 if grep -q /recorded "$TMP/identity.calls"; then fail 'recording ownership must not change'; fi
 
@@ -210,7 +247,7 @@ ns = {'p': 'http://schemas.datacontract.org/2004/07/Amatsukaze.Server'}
 for k, v in {'Name':'EPGStation', 'EncoderType':'x264', 'DisableChapter':'false', 'NoDelogo':'false', 'OutputMask':'2', 'OutputFormat':'MP4', 'EnableRename':'false', 'MoveEDCBFiles':'false'}.items():
     assert p.find('p:' + k, ns).text == v, k
 PYXML
-echo 'PASS: Amatsukaze opt-in, GPU overrides, master migration, real entrypoint YAML (SQLite/MariaDB, enabled/disabled), profile seed/nonoverwrite'
+echo 'PASS: Amatsukaze opt-in, GPU overrides, master migration, real entrypoint YAML (MariaDB, enabled/disabled), profile seed/nonoverwrite'
 
 cat > "$TMP/akebi-stub" <<'EOF'
 #!/bin/sh

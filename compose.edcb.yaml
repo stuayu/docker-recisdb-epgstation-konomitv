@@ -1,0 +1,34 @@
+services:
+  edcb:
+    build:
+      context: .
+      dockerfile: docker/edcb/Dockerfile
+      args:
+        EDCB_REPO: ${EDCB_REPO:-https://github.com/stuayu/EDCB.git}
+        EDCB_REF: ${EDCB_REF:-my-build}
+        EDCB_WEBUI_REPO: ${EDCB_WEBUI_REPO:-https://github.com/stuayu/EDCB_Material_WebUI.git}
+        EDCB_WEBUI_REF: ${EDCB_WEBUI_REF:-dev}
+        EDCB_BONDRIVER_REPO: ${EDCB_BONDRIVER_REPO:-https://github.com/matching/BonDriver_LinuxMirakc.git}
+        EDCB_BONDRIVER_REF: ${EDCB_BONDRIVER_REF:-main}
+    restart: unless-stopped
+    stop_grace_period: 50s
+    environment:
+      TZ: ${TZ:-Asia/Tokyo}
+      RUN_UID: ${RUN_UID:-1000}
+      RUN_GID: ${RUN_GID:-1000}
+      EDCB_TUNER_COUNT: ${EDCB_TUNER_COUNT:-2}
+    depends_on:
+      recisdb-proxy:
+        condition: service_healthy
+    volumes:
+      - ./data/edcb:/var/local/edcb
+      - ./data/recisdb:/recisdb:ro
+      - ${RECORDED_DIR}:/recorded
+    ports:
+      - "${EDCB_WEB_PORT:-5510}:5510"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5510/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
