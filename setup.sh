@@ -236,9 +236,11 @@ if ((edcb_enabled)); then
   fi
 fi
 put EDCB_EPGSTATION_ENABLED "$upload_enabled"; put EDCB_EPGSTATION_ENCODE "$upload_encode"
+if ((upload_enabled)) && [[ $(get EDCB_EPGSTATION_ENABLED 0) != 1 ]]; then
+  message 'EDCB 自動登録の有効化には再ビルドが必要です。make build または docker compose build edcb を実行してください。'
+fi
 put BONCAS_MODE "$boncas_mode"
 put RECORDED_DIRS_JSON "$storage_json"
-put EDCB_RECORDING_PATHS "$(python3 -c 'import json,sys; print(json.dumps([("/recorded" if i==0 else "/recorded"+str(i+1))+"/edcb" for i,_ in enumerate(json.loads(sys.argv[1]))]))' "$storage_json")"
 put EDCB_WEB_PORT "$edcb_port"; put EDCB_HTTPS_PORT "$edcb_https_port"; put EDCB_TUNER_COUNT "$edcb_count"
 # recisdb-proxy always runs as RUN_UID/RUN_GID so it can write data/ and config/ owned by the host user.
 if true; then
@@ -307,7 +309,7 @@ if [[ ! -f $ENV_FILE ]]; then cp .env.example "$ENV_FILE"; fi
 if [[ -s $SETTINGS_FILE ]]; then
   if [[ -f $ENV_FILE ]]; then stamp=$(date +%Y%m%d%H%M%S%N); cp -p "$ENV_FILE" "$ENV_FILE.bak.$stamp"; chmod 600 "$ENV_FILE.bak.$stamp"; fi
   tmp=$(mktemp)
-  sed '/^SETUP_DB=/d' "$ENV_FILE" > "$tmp"
+  sed '/^SETUP_DB=/d; /^EDCB_RECORDING_PATHS=/d; /^BONCAS_SUBNET=/d' "$ENV_FILE" > "$tmp"
   python3 - "$tmp" "$SETTINGS_FILE" <<'PYENV'
 from pathlib import Path
 import sys
@@ -332,7 +334,7 @@ if ((edcb_enabled)); then
 fi
 mkdir -p data/recisdb data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
 if ((amatsukaze_enabled)); then
-  for dir in avs bat config data drcs JL logo profile input output; do mkdir -p "data/amatsukaze/$dir"; done
+  for dir in data input output; do mkdir -p "data/amatsukaze/$dir"; done
 fi
 DEV_DIR="$DEV_DIR" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" ./scripts/gen-tuners.sh >/dev/null || fail 'チューナー Compose を生成できません。' 'scripts/gen-tuners.sh の権限と出力先を確認してください。'
 source_path=$(get KONOMITV_SOURCE ../KonomiTV); source_path=${KONOMITV_SOURCE:-$source_path}; [[ $source_path = /* ]] || source_path="$ROOT/$source_path"

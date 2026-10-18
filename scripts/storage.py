@@ -89,9 +89,36 @@ def mounts(root, env):
     output.write_text(json.dumps({'services': services}, indent=2) + '\n')
 
 
+def warn_removed(root, previous, current):
+    old = dict(zip(directories(previous), targets(previous)))
+    new = dict(zip(directories(current), targets(current)))
+    for source, target in old.items():
+        if new.get(source) == target:
+            continue
+        print(f'注意: 録画先の削除・対応変更: {source} ({target})。既存録画 DB のパスも確認してください。')
+        for service in ('epgstation', 'konomitv', 'edcb'):
+            for path in (root / 'config' / service).rglob('*'):
+                if path.is_file() and 'backup' not in path.parts:
+                    if re.search(re.escape(target) + r'(?![0-9])', path.read_text(errors='replace')):
+                        print(f'警告: {path} が {target} を参照しています。設定の更新が必要です。')
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['candidates'])
-    parser.parse_args()
-    for path, description in candidates():
-        print(path + '\t' + description)
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in ('mounts', 'warn-removed'):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('render', Path(__file__).with_name('render-config.py'))
+        render = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(render)
+        root, path = map(Path, sys.argv[2:4])
+        env = render.read_env(path)
+        if sys.argv[1] == 'mounts':
+            mounts(root, env)
+        else:
+            warn_removed(root, env, dict(env, RECORDED_DIR=sys.argv[4], RECORDED_DIRS_JSON=sys.argv[5]))
+    else:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('command', choices=['candidates'])
+        parser.parse_args()
+        for path, description in candidates():
+            print(path + '\t' + description)

@@ -11,6 +11,9 @@ import shutil
 import sys
 
 source, target = map(Path, sys.argv[1:])
+sys.path.insert(0, os.environ.get('STACK_SCRIPTS', '/opt/stack-scripts'))
+from editable import migrate_amatsukaze
+migrate_amatsukaze(Path(os.environ.get('AMATSUKAZE_LEGACY', '/legacy-amatsukaze')), target)
 for directory in ('avs', 'bat', 'config', 'data', 'drcs', 'JL', 'logo', 'profile', 'input', 'output'):
     (target / directory).mkdir(parents=True, exist_ok=True)
     for root, dirs, files in os.walk(source / directory):

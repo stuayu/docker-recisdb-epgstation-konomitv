@@ -1,22 +1,29 @@
 #!/bin/bash
 set -Eeuo pipefail
-usb_snapshot(){ find /dev/bus/usb -mindepth 2 -maxdepth 2 -printf '%p:%i\n' | sort; }
+runtime=${BONCAS_RUNTIME_SCRIPT:-/opt/boncasrelay/runtime.py}
+usb_snapshot(){ python3 "$runtime" readers; }
+monitor=1
+if [[ ! -d ${USB_DEV_ROOT:-/dev/bus/usb} ]]; then
+  echo '[boncasrelay] /dev/bus/usb がありません。USB 監視を無効化して起動します。' >&2
+  monitor=0
+fi
+python3 "$runtime" acl /config/boncasrelay.ini /run/boncasrelay.ini
 initial_usb=$(usb_snapshot)
 pcscd --foreground &
 pcsc_pid=$!
 for _ in {1..50}; do
-  [[ ! -S /run/pcscd/pcscd.comm ]] || break
+  [[ ! -S ${PCSC_SOCKET:-/run/pcscd/pcscd.comm} ]] || break
   kill -0 "$pcsc_pid" 2>/dev/null || { wait "$pcsc_pid"; exit 1; }
   sleep 0.1
 done
-boncasrelay --config /config/boncasrelay.ini &
+boncasrelay --config /run/boncasrelay.ini &
 relay_pid=$!
 # Host udev multicast is not guaranteed in a container network namespace.
-# Restart the pair after a node change so pcscd scans the current USB tree.
+# Watch only CCID interfaces; unrelated USB changes must not interrupt decryption.
 (
   while sleep 2; do
-    if [[ $(usb_snapshot) != "$initial_usb" ]]; then
-      echo '[boncasrelay] USB device tree changed; restarting for reader discovery' >&2
+    if ((monitor)) && [[ $(usb_snapshot) != "$initial_usb" ]]; then
+      echo '[boncasrelay] CCID reader set changed; restarting for reader discovery' >&2
       exit 1
     fi
   done
@@ -27,5 +34,7 @@ cleanup(){ kill "$pcsc_pid" "$relay_pid" "$watch_pid" 2>/dev/null || true; wait 
 trap cleanup EXIT
 trap 'exit 0' TERM INT
 # Both processes must remain alive. tini forwards shutdown; reap both children.
-wait -n "$pcsc_pid" "$relay_pid" "$watch_pid"
+while kill -0 "$pcsc_pid" 2>/dev/null && kill -0 "$relay_pid" 2>/dev/null && kill -0 "$watch_pid" 2>/dev/null; do
+  sleep 0.2
+done
 exit 1

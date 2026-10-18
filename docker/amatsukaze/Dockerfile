@@ -208,3 +208,5 @@ COPY docker/amatsukaze/entrypoint.sh /usr/local/bin/stack-entrypoint.sh
 RUN chmod 755 /usr/local/bin/stack-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/stack-entrypoint.sh"]
 CMD ["./AmatsukazeServer.sh"]
+
+COPY scripts/editable.py /opt/stack-scripts/editable.py

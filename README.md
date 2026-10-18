@@ -433,7 +433,7 @@ make restore FILE=backup/konomi-backup-YYYYmmdd-HHMMSS.tar.gz
 
 `.env` にはパスワードが含まれます。バックアップファイルは他人に渡さず、安全な場所に保存してください。
 
-`make restore` は現在の `config/` と `data/` をアーカイブの内容で上書きする前に確認します。アーカイブの `.env` は、現在の `.env` がない場合だけ使います。ある場合は `.env.from-archive` として保存します。DB は mariadb を起動してダンプを取り込みます。既存の DB に同名のテーブルがあれば内容が置き換わります。
+`make restore` は現在の `config/` と `data/` をアーカイブの内容で上書きする前に確認します。アーカイブの `.env` は、現在の `.env` がない場合だけ使います。ある場合は `.env.from-archive` として保存します。`compose.storage.yaml` は採用した `.env` から再生成し、アーカイブ内のファイルは `compose.storage.yaml.from-archive` に保存します。DB は mariadb を起動してダンプを取り込みます。既存の DB に同名のテーブルがあれば内容が置き換わります。
 
 ## 録画を自動で CM カット・エンコードする (Amatsukaze)
 
@@ -667,11 +667,11 @@ local を選ぶと `compose.boncasrelay.yaml` を追加し、公開ソースか�
 
 カード通信はホストへ公開せず、recisdb-proxy の B25/4K 接続先はどちらも `boncasrelay:6900` です。WebUI はコンテナ内 `0.0.0.0:6980`、ホストでは `127.0.0.1:6980:6980` のみ公開します。UFW の 6900 許可ルールは同梱構成では不要です。別マシンの Relay を使う場合は、カードホスト側で録画ホスト IP からの 6900 を許可します。
 
-`Allow` と Compose default network の IPAM を `BONCAS_SUBNET` (既定 `172.30.69.0/24`) で一致させます。LAN/VPN や既存 Docker ネットワークと重複しない値にしてください。変更後は `make regen-config SERVICE=boncasrelay` と `make up` が必要です。recisdb-proxy の既存 TOML を local に切り替える場合は `make regen-config SERVICE=recisdb-proxy` も必要です。
+`Allow=@compose-subnets@` を起動時にコンテナの接続済み IPv4 サブネットへ展開し、`/run/boncasrelay.ini` を生成します。Compose default network の IPAM は変更しません。複数サブネットには上流の INI 仕様に従って `Allow` を複数行出力します。以前の既定値 `Allow=172.30.69.0/24` も起動時に展開し、独自に指定した ACL は維持します。recisdb-proxy の既存 TOML を local に切り替える場合は `make regen-config SERVICE=recisdb-proxy` も必要です。
 
 USB は `/dev/bus/usb` 全体をバインドし、`device_cgroup_rules: ['c 189:* rw']` で USB device major 189 の全 minor に読み書きを許可します。固定の `devices:` では再接続後のノード番号変更に対応できないため、この方式を採用しています。`privileged`・ホストの PC/SC socket・ホストネットワークは使いません。ただしコンテナから全 USB デバイスにアクセスできる点は把握してください。根拠は [Linux device 番号表](https://docs.kernel.org/admin-guide/devices.html)と [Compose device_cgroup_rules](https://docs.docker.com/reference/compose-file/services/#device_cgroup_rules) です。
 
-さらに USB ノード一覧・inode を 2 秒ごとに確認し、変化があればコンテナを終了して `restart: unless-stopped` で pcscd と Relay を起動し直します。[pcsc-lite の udev 実装](https://github.com/LudovicRousseau/PCSC/blob/1.9.9/src/hotplug_libudev.c)はイベントを監視しますが、コンテナ内へのホストイベント通知を前提にせず、再起動時の列挙で回復させます。ほかの USB デバイスの接続変更でも Relay が再起動し、通信は一時的に途切れます。USB 抜き差し後の実際の再接続・復号は Linux 実機で確認してください。
+さらに sysfs の CCID インターフェース (`bInterfaceClass=0x0b`) に対応する busnum/devnum の集合を 2 秒ごとに確認し、リーダーの増減・再列挙があればコンテナを終了して `restart: unless-stopped` で pcscd と Relay を起動し直します。[pcsc-lite の udev 実装](https://github.com/LudovicRousseau/PCSC/blob/1.9.9/src/hotplug_libudev.c)はイベントを監視しますが、コンテナ内へのホストイベント通知を前提にせず、再起動時の列挙で回復させます。無関係な USB 機器やチューナーの接続変更では再起動しません。`/dev/bus/usb` がなければ警告して監視を無効化し、サービスを起動します。`pcscd --hotplug` は非 USB リーダー用、`--force-reader-polling` は IFD の通知能力を無視する指定で、udev の USB 再検出ポーリングを有効にするものではありません ([Debian bookworm の manpage](https://manpages.debian.org/bookworm/pcscd/pcscd.8.en.html))。配布版 pcscd の udev 実装を継続利用し、CCID が変化した場合にだけ再起動して回復します。USB 抜き差し後の実際の再接続・復号は Linux 実機で確認してください。
 
 ホストの `pcscd.service` または `pcscd.socket` が有効な場合は、両方の停止・無効化を表示して確認します。別アプリでもカードリーダーを使っている場合は、影響を確認してから選択してください。設定は `config/boncasrelay/boncasrelay.ini`、ログは `docker compose logs boncasrelay` です。
 
@@ -715,3 +715,16 @@ EDCB は `data/edcb/*.ini` と `Setting` の INI/ChSet、Amatsukaze は `data/am
 Amatsukaze のエンコードがないことを確認して停止してから、`make regen-config SERVICE=amatsukaze` を実行してください。この処理は現在ビルドされたイメージの `/opt/amatsukaze-defaults` を起動処理なしで取得し、変更対象・テキスト差分を表示します。承認後に既存設定を `config/amatsukaze/backup/<日時>/` に退避して、イメージの既定値へ戻します。リリースに同梱されない `AmatsukazeServer.xml` / `UIState.xml` / `AutoSelectProfile.xml` は退避後に削除し、次回起動時に本体が既定値を生成します。根拠は Amatsukaze の `Server/EncodeServer.cs` の LoadAppData / LoadUIState / LoadAutoSelectData です。独自ファイルは維持します。ロゴなど同名のバイナリーも対象になり得るため、表示対象を確認してください。EDCB の再生成は INI のみで、予約や取得済み ChSet を消しません。
 
 `make backup` / `make restore` は新しい `config/` 全体と生成済み `compose.storage.yaml` も対象にします。複数保存先すべてと MariaDB の生ファイルは除外し、DB は SQL dump にします。実行中の予約・キューを含む完全な整合性が必要な場合は、録画のない時間帯に該当サービスを停止してから実行してください。
+
+
+更新時の設定移行は `make update` からも `render-config.py first-run` を実行します。
+EDCB はコンテナ起動時にも同じ移行処理を使い、data 側に通常ファイルがあればその内容を優先します。
+config 側に異なる内容があれば `.pre-config-migration` (重複時は日時付き) に退避し、移行をログへ表示します。
+Amatsukaze は旧 data ディレクトリを読み取り専用で参照し、config 側にない設定・素材だけを既定値より先にコピーします。
+
+EDCB 自動登録を有効にしたときは `make build` または `docker compose build edcb` で再ビルドしてください。
+バイナリ未同梱なら警告し、自動登録を無効化して EDCB 本体は起動を続けます。
+`EDCB_RECORDING_PATHS` は保存せず、録画先は `RECORDED_DIR` / `RECORDED_DIRS_JSON` から導出します。
+ディスク別の uploader と設定は起動時に準備するため、設定変更後はコンテナを再起動してください。
+無効時は `uploader-0` ステージを選択し、Rust を使う `uploader-1` には依存しません。
+[BuildKit は依存しないステージをスキップします](https://docs.docker.com/build/building/multi-stage/#differences-between-legacy-builder-and-buildkit)。旧ビルダーは対象外です。

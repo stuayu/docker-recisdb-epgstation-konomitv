@@ -1,4 +1,5 @@
-FROM rust:bookworm AS uploader
+ARG EDCB_EPGSTATION_ENABLED=0
+FROM rust:bookworm AS uploader-1
 ARG EDCB_TO_EPGSTATION_REPO=https://github.com/stuayu/EDCB-to-EPGStation.git
 ARG EDCB_TO_EPGSTATION_REF=main
 ARG EDCB_EPGSTATION_ENABLED=0
@@ -8,6 +9,11 @@ RUN mkdir -p /out && if [ "$EDCB_EPGSTATION_ENABLED" = 1 ]; then \
     && git fetch origin "$EDCB_TO_EPGSTATION_REF" && git checkout --detach FETCH_HEAD \
     && cargo build --locked --release \
     && cp target/release/edcb_to_epgstation_ts /out/; fi
+
+FROM debian:bookworm-slim AS uploader-0
+RUN mkdir /out
+
+FROM uploader-${EDCB_EPGSTATION_ENABLED} AS uploader
 
 FROM debian:bookworm AS builder
 ARG EDCB_REPO=https://github.com/stuayu/EDCB.git
@@ -38,7 +44,7 @@ RUN git clone "$EDCB_BONDRIVER_REPO" bondriver && cd bondriver \
     && install -m 755 BonDriver_LinuxMirakc.so /usr/local/lib/edcb/
 
 FROM debian:bookworm-slim
-ENV TZ=Asia/Tokyo LANG=C.UTF-8
+ENV TZ=Asia/Tokyo LANG=C.UTF-8 EDCB_STACK_ROOT=/opt
 # Debian provides the Lua 5.2 and zlib modules described in HowToBuild.txt.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates liblua5.2-0 lua-zlib libstdc++6 python3 python3-yaml tini gosu curl tzdata \
@@ -48,6 +54,9 @@ COPY --from=builder /usr/local/lib/edcb/ /usr/local/lib/edcb/
 COPY --from=builder /var/local/edcb/ /opt/edcb-defaults/
 COPY docker/edcb/entrypoint.sh /usr/local/bin/edcb-entrypoint.sh
 COPY docker/edcb/configure.py docker/edcb/chset.py docker/edcb/post-record.py docker/edcb/post-record.sh /opt/edcb-stack/
+COPY scripts/editable.py scripts/storage.py scripts/render-config.py /opt/scripts/
+COPY templates/edcb/ /opt/templates/edcb/
+COPY docker/edcb/upload_runtime.py /opt/edcb-stack/
 COPY --from=uploader /out/ /opt/edcb-upload/
 RUN chmod 755 /opt/edcb-stack/post-record.sh
 RUN chmod 755 /usr/local/bin/edcb-entrypoint.sh

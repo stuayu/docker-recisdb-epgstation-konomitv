@@ -44,7 +44,7 @@ for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (Fal
         assert [p['target'] for p in card['ports']] == [6980]
         assert card['ports'][0]['host_ip'] == '127.0.0.1'
         assert 'c 189:* rw' in card['device_cgroup_rules']
-        assert config['networks']['default']['ipam']['config'][0]['subnet'] == '172.30.69.0/24'
+        assert not config['networks']['default'].get('ipam')
         assert not card.get('privileged')
     assert ('edcb' in services) == edcb
     assert ('amatsukaze' in services) == amatsukaze
@@ -81,8 +81,11 @@ with tempfile.TemporaryDirectory() as temp:
     for file in (root / 'compose.yaml', root / 'compose.edcb.yaml', root / 'compose.amatsukaze.yaml', directory / 'compose.storage.yaml'):
         command.extend(['-f', str(file)])
     output = subprocess.run(command + ['config', '--format', 'json'], cwd=root,
-                            env=dict(env, RECORDED_DIR=settings['RECORDED_DIR']), capture_output=True, text=True, check=True)
+                            env=dict(env, RECORDED_DIR=settings['RECORDED_DIR'], RECORDED_DIRS_JSON=settings['RECORDED_DIRS_JSON']), capture_output=True, text=True, check=True)
     services = json.loads(output.stdout)['services']
+    assert services['edcb']['environment']['RECORDED_DIR'] == settings['RECORDED_DIR']
+    assert json.loads(services['edcb']['environment']['RECORDED_DIRS_JSON']) == json.loads(settings['RECORDED_DIRS_JSON'])
+    assert 'EDCB_RECORDING_PATHS' not in services['edcb']['environment']
     for name in ('epgstation', 'edcb', 'amatsukaze', 'konomitv'):
         target = '/host-rootfs/recorded2' if name == 'konomitv' else '/recorded2'
         volume = next(v for v in services[name]['volumes'] if v['target'] == target)

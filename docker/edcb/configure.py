@@ -1,8 +1,16 @@
 """Seed missing EDCB settings. Existing files always win."""
 import os
-import json
 from pathlib import Path
 import shutil
+import sys
+stack_root = Path(os.environ.get("EDCB_STACK_ROOT", str(Path(__file__).resolve().parents[2])))
+sys.path.insert(0, str(stack_root / "scripts"))
+from editable import migrate_edcb, edcb_editable, backup
+from storage import targets
+from importlib.util import module_from_spec, spec_from_file_location
+spec = spec_from_file_location("render", stack_root / "scripts/render-config.py")
+render = module_from_spec(spec)
+spec.loader.exec_module(render)
 
 root = Path(os.environ.get('EDCB_ROOT', '/var/local/edcb'))
 defaults = Path(os.environ.get('EDCB_DEFAULTS', '/opt/edcb-defaults'))
@@ -14,12 +22,25 @@ if not 1 <= count <= 99:
     raise SystemExit('EDCB_TUNER_COUNT must be 1..99')
 root.mkdir(parents=True, exist_ok=True)
 recorded.mkdir(parents=True, exist_ok=True)
+migrate_edcb(root, config)
+
+upload_enabled = os.environ.get('EDCB_EPGSTATION_ENABLED') == '1'
+binary = Path(os.environ.get('EDCB_UPLOAD_BINARY', '/opt/edcb-upload/edcb_to_epgstation_ts'))
+if upload_enabled and not binary.is_file():
+    print('[edcb] 自動登録バイナリなし。make build / docker compose build edcb で再ビルドが必要。自動登録を無効化して起動を続行。', file=sys.stderr)
+    upload_enabled = False
+
+# Stack INIs come from the same templates as host provisioning.
+template_root = Path(os.environ.get('EDCB_TEMPLATES', str(stack_root / 'templates/edcb')))
+stack_names = {p.name.removesuffix('.example') for p in template_root.glob('*.example')}
 for src in defaults.rglob('*'):
     relative = src.relative_to(defaults)
-    editable = src.suffix.lower() == '.ini' or src.name.endswith('.ChSet4.txt') or src.name == 'ChSet5.txt'
+    editable = edcb_editable(src)
+    if relative.as_posix() in stack_names:
+        continue
     dst = (config if editable else root) / relative
     if src.is_dir():
-        dst.mkdir(exist_ok=True)
+        dst.mkdir(parents=True, exist_ok=True)
     elif not dst.exists():
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
@@ -35,62 +56,22 @@ for src in web_defaults.rglob('*') if web_defaults.is_dir() else []:
         shutil.copy2(src, dst)
 (root / 'Setting').mkdir(exist_ok=True)
 
-def seed(name, body):
-    try:
-        with (config / name).open('x', encoding='utf-8') as f:
-            f.write(body)
-    except FileExistsError:
-        pass
-
-recording_paths = json.loads(os.environ.get('EDCB_RECORDING_PATHS', json.dumps([str(recorded)])))
-folders = f'RecFolderNum={len(recording_paths)}\n' + '\n'.join(f'RecFolderPath{i}={p}' for i, p in enumerate(recording_paths))
-seed('Common.ini', f'''[SET]
-DataSavePath={root}/Setting
-{folders}
-''')
-seed('EpgTimerSrv.ini', f'''[SET]
-EnableHttpSrv=1
-HttpPort=5510
-HttpPublicFolder={root}/HttpPublic
-HttpAccessControlList=+127.0.0.1,+10.0.0.0/8,+172.16.0.0/12,+192.168.0.0/16
-# Material WebUI (E3) keeps one Civetweb thread per SSE view; the default 5 stalls tabs.
-HttpNumThreads=50
-EnableTCPSrv=0
-RecEndMode=0
-[BonDriver_LinuxMirakc.so]
-Count={count}
-Priority=1
-GetEpg=1
-EPGCount=1
-[EPG_CAP]
-Count=2
-0=06:00
-0Select=1
-1=18:00
-1Select=1
-[TVTEST]
-Num=1
-0=BonDriver_LinuxMirakc.so
-[REC_DEF]
-RecMode=3
-{'BatFilePath=/opt/edcb-stack/post-record.sh' if os.environ.get('EDCB_EPGSTATION_ENABLED') == '1' else ''}
-''')
-seed('EpgDataCap_Bon.ini', '''[SET]
-Scramble=0
-EMM=0
-''')
-# This INI belongs alongside the .so: upstream uses dladdr(), not Common.ini.
+recording_paths = [p + '/edcb' for p in targets(os.environ)]
+if 'EDCB_RECORDED' in os.environ and 'RECORDED_DIRS_JSON' not in os.environ:
+    recording_paths = [str(recorded)]
+values = dict(os.environ, COMPOSE_FILE='compose.edcb.yaml', EDCB_EPGSTATION_ENABLED='1' if upload_enabled else '0')
+for template in template_root.glob('*.example'):
+    destination = config / template.name.removesuffix('.example')
+    if not destination.exists():
+        body = render.render('edcb', template.read_text(), values)
+        body = body.replace('/var/local/edcb', str(root))
+        # EDCB_RECORDED is a test/custom single-volume override.
+        if 'EDCB_RECORDED' in os.environ and 'RECORDED_DIRS_JSON' not in os.environ:
+            body = body.replace('/recorded/edcb', str(recorded))
+        destination.write_text(body)
 lib = Path(os.environ.get('EDCB_LIB', '/usr/local/lib/edcb'))
 lib.mkdir(parents=True, exist_ok=True)
 ini = config / 'BonDriver_LinuxMirakc.so.ini'
-seed(ini.name, '''[GLOBAL]
-SERVER_HOST="recisdb-proxy"
-SERVER_PORT=40080
-SERVER_TYPE="http"
-DECODE_B25=0
-PRIORITY=2
-SERVICE_SPLIT=1
-''')
 link = lib / ini.name
 if not link.exists() and not link.is_symlink():
     link.symlink_to(ini)
@@ -99,7 +80,7 @@ if not link.exists() and not link.is_symlink():
 # in config/ while Reserve/RecInfo/EpgAutoAdd and EpgData stay in data/Setting.
 if config != root:
     for src in config.rglob('*'):
-        if not src.is_file() or 'backup' in src.relative_to(config).parts:
+        if not src.is_file() or not edcb_editable(src) or 'backup' in src.relative_to(config).parts:
             continue
         dst = root / src.relative_to(config)
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -107,17 +88,24 @@ if config != root:
             continue
         if dst.exists():
             # Retain the old data-side copy once. Never destroy an old configuration.
-            legacy = dst.with_name(dst.name + '.pre-config-migration')
-            if legacy.exists():
-                raise SystemExit(f'旧設定退避先が既に存在します: {legacy}')
-            dst.rename(legacy)
+            backup(dst)
+            dst.unlink()
         dst.symlink_to(src)
 
-if os.environ.get('EDCB_EPGSTATION_ENABLED') == '1':
+disabled = root / 'upload.disabled'
+if upload_enabled:
+    disabled.unlink(missing_ok=True)
+else:
+    disabled.touch()
+
+if upload_enabled and os.environ.get('EDCB_PREPARE_UPLOAD', '1') == '1':
     runtime = root / 'upload'
     runtime.mkdir(exist_ok=True)
-    binary = Path(os.environ.get('EDCB_UPLOAD_BINARY', '/opt/edcb-upload/edcb_to_epgstation_ts'))
     shutil.copy2(binary, runtime / binary.name)
     link = runtime / 'config.yml'
     if not link.exists() and not link.is_symlink():
-        link.symlink_to('/config/edcb-to-epgstation/config.yml')
+        link.symlink_to(os.environ.get('EDCB_UPLOAD_CONFIG', '/config/edcb-to-epgstation/config.yml'))
+
+    # Prepare every recording-disk runtime once at startup.
+    from upload_runtime import prepare
+    prepare(runtime, recording_paths)

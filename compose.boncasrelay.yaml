@@ -18,8 +18,3 @@ services:
     depends_on:
       boncasrelay:
         condition: service_started
-networks:
-  default:
-    ipam:
-      config:
-        - subnet: ${BONCAS_SUBNET:-172.30.69.0/24}

@@ -21,7 +21,8 @@ services:
       RUN_GID: ${RUN_GID:-1000}
       EDCB_CONFIG_DIR: /config/edcb
       EDCB_EPGSTATION_ENABLED: ${EDCB_EPGSTATION_ENABLED:-0}
-      EDCB_RECORDING_PATHS: ${EDCB_RECORDING_PATHS:-["/recorded/edcb"]}
+      RECORDED_DIR: ${RECORDED_DIR}
+      RECORDED_DIRS_JSON: ${RECORDED_DIRS_JSON:-[]}
       EDCB_TUNER_COUNT: ${EDCB_TUNER_COUNT:-2}
     depends_on:
       recisdb-proxy:

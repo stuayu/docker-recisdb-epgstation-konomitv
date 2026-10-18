@@ -74,10 +74,13 @@ select_storage(){
   if [[ -n ${RECORDED_DIRS_JSON:-} ]]; then
     while IFS= read -r path; do [[ -z $path ]] || paths+=("$path"); done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$RECORDED_DIRS_JSON")
     [[ ${#paths[@]} -gt 0 ]] || paths=("$default")
-  elif [[ -z ${RECORDED_DIR:-} || -n $TUI ]]; then
+    [[ -z ${RECORDED_DIR:-} ]] || paths=("$default" "${paths[@]:1}")
+  else
     paths=("$default")
-    while IFS= read -r path; do [[ -z $path || $path == "$default" ]] || paths+=("$path"); done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$(get RECORDED_DIRS_JSON '[]')")
-  else paths=("$default"); fi
+    while IFS= read -r path; do
+      [[ -z $path || $path == "$default" || $path == "$(get RECORDED_DIR ./data/recorded)" ]] || paths+=("$path")
+    done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$(get RECORDED_DIRS_JSON '[]')")
+  fi
   if [[ -n $TUI ]]; then
     candidates=("${paths[@]}")
     while IFS=$'\t' read -r path details; do
@@ -112,7 +115,7 @@ select_storage(){
       path=${paths[$choice]}; unset 'paths[choice]'; paths=("$path" "${paths[@]}")
     fi
   elif [[ -z ${RECORDED_DIRS_JSON:-} ]]; then
-    ask '録画保存ディレクトリ' "$default"; if [[ $REPLY != "$default" ]]; then paths=("$REPLY"); fi
+    ask '録画保存ディレクトリ' "$default"; if [[ $REPLY != "$default" ]]; then paths=("$REPLY" "${paths[@]:1}"); fi
   fi
   for path in "${paths[@]}"; do
     [[ -n $path && $path != *'$'* && $path != *$'\n'* && $path != *$'\r'* ]] || fail '録画先の文字が不正です。' '改行と $ は使用できません。'
@@ -134,6 +137,7 @@ select_storage(){
   done
   recorded=${paths[0]}
   storage_json=$(python3 -c 'import json,sys; print(json.dumps(list(dict.fromkeys(sys.argv[1:]))))' "${paths[@]}")
+  python3 "$ROOT/scripts/storage.py" warn-removed "$ROOT" "$ENV_FILE" "$recorded" "$storage_json"
 }
 run_logged(){
   local status pid

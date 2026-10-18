@@ -135,7 +135,7 @@ with tempfile.TemporaryDirectory() as temp:
     env = dict(os.environ, EDCB_ROOT=str(base / 'data'), EDCB_CONFIG_DIR=str(base / 'config'),
                EDCB_DEFAULTS=str(base / 'defaults'), EDCB_LIB=str(base / 'lib'),
                EDCB_RECORDED=str(base / 'recorded'), EDCB_UPLOAD_BINARY=str(binary),
-               EDCB_EPGSTATION_ENABLED='1', EDCB_RECORDING_PATHS='["/recorded/edcb", "/recorded2/edcb"]')
+               EDCB_EPGSTATION_ENABLED='1', RECORDED_DIRS_JSON='["a", "b"]', RECORDED_DIR="a")
     (base / 'config/Setting').mkdir(parents=True)
     (base / 'config/Setting/ChSet5.txt').write_text('user channels')
     subprocess.run(['python3', str(ROOT / 'docker/edcb/configure.py')], env=env, check=True)

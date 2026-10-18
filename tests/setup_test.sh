@@ -219,10 +219,10 @@ for dir in avs bat config data drcs JL logo profile input output; do mkdir -p "$
 cp "$ROOT/docker/amatsukaze/EPGStation.profile" "$seed/profile/"
 mkdir -p "$app"
 printf '#!/bin/sh\nexec "$@"\n' > "$app/entrypoint.sh"; chmod +x "$app/entrypoint.sh"
-AMATSUKAZE_APP_ROOT="$app" AMATSUKAZE_DEFAULTS="$seed" "$ROOT/docker/amatsukaze/entrypoint.sh" true
+STACK_SCRIPTS="$ROOT/scripts" AMATSUKAZE_APP_ROOT="$app" AMATSUKAZE_DEFAULTS="$seed" "$ROOT/docker/amatsukaze/entrypoint.sh" true
 cmp "$seed/profile/EPGStation.profile" "$app/profile/EPGStation.profile" || fail 'first boot profile seed'
 printf 'user profile\n' > "$app/profile/EPGStation.profile"
-AMATSUKAZE_APP_ROOT="$app" AMATSUKAZE_DEFAULTS="$seed" "$ROOT/docker/amatsukaze/entrypoint.sh" true
+STACK_SCRIPTS="$ROOT/scripts" AMATSUKAZE_APP_ROOT="$app" AMATSUKAZE_DEFAULTS="$seed" "$ROOT/docker/amatsukaze/entrypoint.sh" true
 grep -qx 'user profile' "$app/profile/EPGStation.profile" || fail 'profile overwritten'
 python3 - "$ROOT/docker/amatsukaze/EPGStation.profile" <<'PYXML'
 import sys, xml.etree.ElementTree as ET

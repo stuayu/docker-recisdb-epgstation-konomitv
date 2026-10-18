@@ -14,6 +14,7 @@ update:
 	@source=$$(sed -n 's/^KONOMITV_SOURCE=//p' .env | tail -n1); \
 	[ -n "$$source" ] || source=../KonomiTV; \
 	git -C "$$source" pull --ff-only
+	python3 scripts/render-config.py --root . --env .env first-run
 	docker compose pull mariadb
 	docker compose build
 	docker compose up -d
@@ -22,6 +23,7 @@ test:
 	bash tests/setup_test.sh
 	python3 tests/edcb_test.py
 	python3 tests/config_test.py
+	python3 tests/review_test.py
 
 config:
 	./setup.sh --reconfigure

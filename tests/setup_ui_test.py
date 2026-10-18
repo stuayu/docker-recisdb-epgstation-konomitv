@@ -128,7 +128,7 @@ exit 0''')
     assert 'BatFilePath=/opt/edcb-stack/post-record.sh' in (repo / 'config/edcb/EpgTimerSrv.ini').read_text()
     upload = (repo / 'config/edcb-to-epgstation/config.yml').read_text()
     assert 'uploadMode: "path"' in upload and 'runEncode: false' in upload
-    assert 'Allow=172.30.69.0/24' in (repo / 'config/boncasrelay/boncasrelay.ini').read_text()
+    assert 'Allow=@compose-subnets@' in (repo / 'config/boncasrelay/boncasrelay.ini').read_text()
     assert 'c 189:* rw' in (repo / 'compose.boncasrelay.yaml').read_text()
     mounts_out = json.loads((repo / 'compose.storage.yaml').read_text())['services']
     assert mounts_out['konomitv']['volumes'][0]['target'] == '/host-rootfs/recorded2'

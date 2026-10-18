@@ -16,8 +16,8 @@ import re
 import shutil
 import sys
 import json
-import ipaddress
 from storage import directories, targets, mounts
+from editable import migrate_edcb, migrate_amatsukaze
 
 SERVICES = {
     'recisdb-proxy': {
@@ -62,26 +62,10 @@ def enabled(name, env):
 
 
 def migrate_editable(root, env):
-    # Settings only. Reservations, EPG, logs, queue and caches remain under data/.
     if enabled('edcb', env):
-        old = root / 'data/edcb'
-        sources = list(old.glob('*.ini')) + list((old / 'Setting').glob('*.ini')) + list((old / 'Setting').glob('*.ChSet4.txt'))
-        sources += [old / 'Setting/ChSet5.txt']
-        for src in sources:
-            dst = root / 'config/edcb' / src.relative_to(old)
-            if src.is_file() and not dst.exists():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-                print(f'旧設定を移行: {src} -> {dst} (旧ファイルは残しています)')
+        migrate_edcb(root / 'data/edcb', root / 'config/edcb')
     if enabled('amatsukaze', env):
-        for name in ('avs', 'bat', 'config', 'drcs', 'JL', 'logo', 'profile'):
-            old = root / 'data/amatsukaze' / name
-            if old.is_dir():
-                for src in old.rglob('*'):
-                    dst = root / 'config/amatsukaze' / name / src.relative_to(old)
-                    if src.is_file() and not dst.exists():
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src, dst)
+        migrate_amatsukaze(root / 'data/amatsukaze', root / 'config/amatsukaze')
 
 
 AMATSUKAZE_ENCODE = """    - id: amatsukaze
@@ -178,7 +162,7 @@ def render(name, text, env):
             text = re.sub(r'    recorded_folders: \[.*?\n    \]',
                           '    recorded_folders: ' + json.dumps(targets(env)), text, flags=re.S)
     elif name == 'boncasrelay':
-        subnet = str(ipaddress.ip_network(env.get('BONCAS_SUBNET', '172.30.69.0/24')))
+        subnet = '@compose-subnets@'
         text = text.replace('${BONCAS_SUBNET}', subnet)
     elif name == 'edcb-to-epgstation':
         text = text.replace('${EDCB_EPGSTATION_ENCODE}', 'true' if env.get('EDCB_EPGSTATION_ENCODE') == '1' and amatsukaze_enabled(env) else 'false')
