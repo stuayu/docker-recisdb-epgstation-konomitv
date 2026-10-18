@@ -1,11 +1,17 @@
 # dtv-stack
 
-Compose で recisdb-proxy、EPGStation、KonomiTV を連携。チューナーは recisdb-proxy のみに渡し、B-CAS / ACAS は別ホストの BonCasServer を BonCasLink で利用。
+Compose で recisdb-proxy、EPGStation、KonomiTV を連携。チューナーは recisdb-proxy のみに渡し、B-CAS / ACAS はカードを挿したホストの BonCasRelay から BonCasLink 互換プロトコルで利用。
 
 ## 前提
 
 - Linux ホストに対応チューナーと udev / device 設定を導入。
-- BonCasServer の B-CAS / ACAS ポートを確認。一般的な初期値は 6900 / 6902。
+- カードを挿したホスト (Linux / macOS / Windows) で BonCasRelay を起動。録画ホストの IP だけ許可し、既定ポート 6900 を使用。
+- 起動例 (カードホストで実行):
+
+  ```sh
+  boncasrelay --allow 192.168.1.20/32
+  ```
+
 - Docker Engine と Compose v2。
 - KonomiTV のフォークを `../KonomiTV` に配置するか、`.env` の `KONOMITV_SOURCE` を指定。Compose はフォーク同梱の `Dockerfile` を直接使用。
 
@@ -13,7 +19,7 @@ Compose で recisdb-proxy、EPGStation、KonomiTV を連携。チューナーは
 
 ```sh
 cp .env.example .env
-# .env の BonCasServer アドレス、録画先、VIDEO_GID、KONOMITV_SOURCE を編集
+# .env の BonCasRelay アドレス、録画先、VIDEO_GID、KONOMITV_SOURCE を編集
 make config
 make tuners
 docker compose build
@@ -22,6 +28,8 @@ docker compose logs -f recisdb-proxy
 ```
 
 `make tuners` は実在する `/dev` ノードを検出し、gitignore対象 `compose.tuners.yaml` を生成。チューナー追加後は再実行。
+
+BonCasRelay は APDU から B-CAS / ACAS を自動判定し、既定の自動振り分けポート 6900 で受け付ける。recisdb-proxy の B25 用 `BONCAS_B25_PORT` と 4K 用 `BONCAS_4K_PORT` は同じ 6900 を指定できる。Web 設定画面は `http://127.0.0.1:6980/`。固定ポートを使う場合は `--reader-port READER=PORT` または INI の `[CardPort]` を設定し、`.env` のポートも合わせる。
 
 初期設定:
 
@@ -71,7 +79,7 @@ EPGStation のDB・一般一時ファイルは `data/epgstation`、ログは `da
 
 ログ設定3ファイルは起動時にフォーク内 `*.sample.yml` から生成。サンプルの `%OperatorSystem%` 等はEPGStationが `/app/logs/...` へ展開し、`/app/logs` はホストへ永続化。
 
-BonCasLink は平文・無認証。BonCasServerのポートをLAN/VPNに限定し、ファイアウォールで録画ホストだけ許可。Mirakurun APIとWeb UIをインターネットへ直接公開しない。
+BonCasLink 互換通信は平文・無認証。BonCasRelay のカード通信ポートを LAN/VPN に限定し、`--allow` とファイアウォールで録画ホストだけ許可。Mirakurun APIとWeb UIをインターネットへ直接公開しない。BonCasRelay の Web 設定画面は既定でループバック待受。
 
 ## KonomiTV ネットワーク
 
@@ -81,7 +89,7 @@ KonomiTV はbridgeで稼働し、`mirakurun_url` はCompose DNS名 `recisdb-prox
 
 ## トラブルシュート
 
-- B25復号不可: `BONCAS_B25_HOST:BONCAS_B25_PORT` 到達性、サーバーポート、B-CASカード確認。4Kは `BONCAS_4K_HOST:BONCAS_4K_PORT` とdantto4k設定確認。
+- B25復号不可: `BONCAS_B25_HOST:BONCAS_B25_PORT` 到達性、BonCasRelay のカード認識、B-CASカード確認。BonCasRelay の Web 設定画面でリーダー判定結果・振り分け先・接続中クライアントを確認。4Kは `BONCAS_4K_HOST:BONCAS_4K_PORT` とdantto4k設定確認。
 - チューナー不可視: 対応 `/dev` ノード、`compose.tuners.yaml`、`VIDEO_GID` 確認。追加後 `make tuners` 再実行。
 - KonomiTVがMirakurun URLを拒否: `/mirakurun/api/tuners` の `Server: Mirakurun/...` ヘッダーを返す互換版が必要。
 - API到達不可: コンテナ間URLは `http://recisdb-proxy:40080/mirakurun`。公開ポートと内部ポートを混同しない。
