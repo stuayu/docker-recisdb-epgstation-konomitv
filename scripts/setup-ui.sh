@@ -79,6 +79,79 @@ select_software(){
   [[ $selected != *AMATSUKAZE* ]] || AMATSUKAZE=yes
   [[ $selected != *HTTPS* ]] || HTTPS=yes
 }
+select_tuners(){
+  local current path adapter pattern selected tag value excluded default_selection
+  local -a candidates=() args=() exclusions=() patterns=() prior_patterns=()
+  if [[ ${TUNER_EXCLUDE+x} ]]; then current=$TUNER_EXCLUDE; else current=$(get TUNER_EXCLUDE ''); fi
+  for path in "$DEV_DIR"/px4video* "$DEV_DIR"/pt3video* "$DEV_DIR"/pxmlt*video* "$DEV_DIR"/pxm1urvideo* "$DEV_DIR"/pxs1urvideo* "$DEV_DIR"/isdbt2071video* "$DEV_DIR"/isdb2056video*; do
+    [[ -e $path && ! -d $path ]] && candidates+=("$path")
+  done
+  for adapter in "$DEV_DIR"/dvb/adapter[0-9]*; do
+    [[ -d $adapter ]] || continue
+    for path in "$adapter"/frontend[0-9]*; do [[ -e $path && ! -d $path ]] && candidates+=("$path"); done
+  done
+  if ((${#candidates[@]} == 0)); then tuner_exclude=$current; put TUNER_EXCLUDE "$tuner_exclude"; return; fi
+  if ((YES || NONINTERACTIVE)); then tuner_exclude=$current; put TUNER_EXCLUDE "$tuner_exclude"; return; fi
+  for ((tag=0; tag<${#candidates[@]}; tag++)); do
+    path=${candidates[$tag]}; excluded=0; IFS=, read -ra patterns <<< "$current" || true
+    patterns+=( '')
+    for pattern in "${patterns[@]}"; do
+      [[ -n $pattern ]] || continue
+      # shellcheck disable=SC2053
+      if [[ $path == $pattern ]]; then excluded=1; fi
+      if [[ $path == "$DEV_DIR"/dvb/adapter[0-9]*/* ]]; then
+        adapter=${path%/*}
+        # shellcheck disable=SC2053
+        [[ $adapter != $pattern ]] || excluded=1
+      fi
+    done
+    if ((excluded)); then value=OFF; else
+      value=ON
+      default_selection="${default_selection:+$default_selection,}$tag"
+    fi
+    args+=("$tag" "$path" "$value")
+  done
+  if [[ -n $TUI ]]; then
+    selected=$(ui --checklist '使うチューナー (Space で選択、既定は全台)' 22 78 14 "${args[@]}" 3>&1 1>&2 2>&3) || exit 1
+    for ((tag=0; tag<${#candidates[@]}; tag++)); do
+      path=${candidates[$tag]}
+      [[ " $selected " == *"\"$tag\""* || " $selected " == *" $tag "* ]] || exclusions+=("$path")
+    done
+  else
+    printf '検出チューナー (使う番号をカンマ区切りで指定。空欄=既定):\n'
+    for ((tag=0; tag<${#candidates[@]}; tag++)); do
+      value=' '; [[ ,$default_selection, != *,$tag,* ]] || value='x'
+      printf '  [%s] %d) %s\n' "$value" "$tag" "${candidates[$tag]}"
+    done
+    read -r -p "使う番号 [$default_selection]: " selected
+    selected=${selected:-$default_selection}
+    IFS=, read -ra args <<< "$selected" || true
+    args+=( '')
+    for ((tag=0; tag<${#candidates[@]}; tag++)); do
+      excluded=1
+      for value in "${args[@]}"; do [[ $value != "$tag" ]] || excluded=0; done
+      ((excluded)) && exclusions+=("${candidates[$tag]}")
+    done
+  fi
+  IFS=, read -ra prior_patterns <<< "$current" || true
+  prior_patterns+=( '')
+  for pattern in "${prior_patterns[@]}"; do
+    [[ -n $pattern ]] || continue
+    excluded=0
+    for path in "${candidates[@]}"; do
+      # shellcheck disable=SC2053
+      if [[ $path == $pattern ]]; then excluded=1; fi
+      if [[ $path == "$DEV_DIR"/dvb/adapter[0-9]*/* ]]; then
+        adapter=${path%/*}
+        # shellcheck disable=SC2053
+        [[ $adapter != $pattern ]] || excluded=1
+      fi
+    done
+    ((excluded)) || exclusions+=("$pattern")
+  done
+  tuner_exclude=$(IFS=,; printf '%s' "${exclusions[*]}")
+  put TUNER_EXCLUDE "$tuner_exclude"
+}
 select_storage(){
   local default=${RECORDED_DIR:-$(get RECORDED_DIR ./data/recorded)} selected path details tag value choice free owner
   local args=() paths=() candidates=() descriptions=() line

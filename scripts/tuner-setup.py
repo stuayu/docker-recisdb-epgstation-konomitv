@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import grp
 import fcntl
+import fnmatch
 import hashlib
 import importlib.util
 import json
@@ -17,7 +18,7 @@ import subprocess
 import sys
 import time
 from urllib.error import HTTPError
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,20 @@ def settings(path):
 def canonical(path):
     # adapterN and adapterN/frontend0 identify the same physical frontend.
     return path + '/frontend0' if re.fullmatch(r'/dev/dvb/adapter\d+', path) else path
+
+
+def excluded(path, patterns):
+    physical = canonical(path)
+    adapter = re.match(r'(/dev/dvb/adapter\d+)(?:/|$)', physical)
+    return any(fnmatch.fnmatchcase(path, pattern)
+               or fnmatch.fnmatchcase(physical, pattern)
+               or (adapter and fnmatch.fnmatchcase(adapter[1], pattern))
+               for pattern in patterns if pattern)
+
+
+def exclusion_patterns(env):
+    raw = os.environ['TUNER_EXCLUDE'] if 'TUNER_EXCLUDE' in os.environ else env.get('TUNER_EXCLUDE', '')
+    return [item.strip() for item in raw.split(',') if item.strip()]
 
 
 def devices(path):
@@ -108,15 +123,19 @@ def scan_log_lines(env, since):
         return []
     if result.returncode:
         return []
-    patterns = (re.compile(r'perform_scan:', re.I), re.compile(r'enumerate_spaces_and_channels', re.I))
+    patterns = (re.compile(r'perform_scan:', re.I), re.compile(r'enumerate_spaces_and_channels', re.I),
+                re.compile(r'no signal/carrier', re.I), re.compile(r'total channels found:\s*0', re.I),
+                re.compile(r'permission denied', re.I), re.compile(r'failed to enumerate', re.I))
     severity = re.compile(r'\b(?:WARN|WARNING|ERROR)\b', re.I)
     secret = re.compile(r'(?i)(bearer\s+)[^\s,;]+|((?:auth[_-]?token|token|password|secret)\s*[=:]\s*)[^\s,;]+')
     lines = []
     for line in result.stdout.splitlines():
-        if severity.search(line) and any(pattern.search(line) for pattern in patterns):
+        if any(pattern.search(line) for pattern in patterns) and (severity.search(line) or
+                re.search(r'no signal/carrier|total channels found:\s*0', line, re.I)):
             cleaned = secret.sub(lambda match: (match.group(1) or match.group(2)) + '[REDACTED]', line)
             lines.append(cleaned[:500])
-    return lines[-5:]
+    priority = [line for line in lines if re.search(r'permission denied|failed to enumerate|total channels found:\s*0|no signal/carrier', line, re.I)]
+    return (priority + [line for line in lines if line not in priority])[-8:]
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -132,12 +151,12 @@ class API:
         self.base, self.token = base.rstrip('/'), token
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
 
-    def call(self, path, payload=None):
+    def call(self, path, payload=None, method=None):
         headers = {'Content-Type': 'application/json'}
         if self.token:
             headers['Authorization'] = 'Bearer ' + self.token
         request = Request(self.base + path, headers=headers,
-                          data=None if payload is None else json.dumps(payload).encode())
+                          data=None if payload is None else json.dumps(payload).encode(), method=method)
         try:
             with self.opener.open(request, timeout=10) as response:
                 result = json.load(response)
@@ -180,7 +199,7 @@ def private_database(database):
             path.chmod(0o600)
 
 
-def register(api, paths):
+def register(api, paths, patterns=()):
     existing = api.call('/api/bondrivers')['bondrivers']
     by_path = {}
     for row in existing:
@@ -188,7 +207,9 @@ def register(api, paths):
         if key in by_path and key in paths:
             raise SetupError('同じ物理デバイスが複数登録済み。BonDriver 画面で整理してください: ' + key)
         by_path[key] = row
-        if row['dll_path'].startswith('/dev/') and key not in paths:
+        if excluded(row['dll_path'], patterns):
+            say('登録済みだが除外対象: ' + row['dll_path'] + ' (BonDriver 画面または make tuners-prune で削除)')
+        if row['dll_path'].startswith('/dev/') and key not in paths and not excluded(row['dll_path'], patterns):
             say('警告: Compose にない登録を保持: ' + row['dll_path'] + ' (USB・デバイス番号を確認)')
     added = 0
     for path in paths:
@@ -246,10 +267,20 @@ class Progress:
             self.process.wait(timeout=10)
 
 
+def classify_scan_logs(lines):
+    joined = '\n'.join(lines)
+    if re.search(r'permission denied|failed to enumerate|failed to enumerate_spaces', joined, re.I):
+        return 'enumeration'
+    if re.search(r'total channels found:\s*0', joined, re.I) or len(re.findall(r'no signal/carrier', joined, re.I)) >= 3:
+        return 'zero'
+    return 'unknown'
+
+
 def scan(api, rows, automatic, timeout, poll, progress, env):
     latest = {row['id']: history(api, row) for row in rows}
     pending = [row for row in rows if not automatic or not scanned(latest[row['id']]) or row.get('is_scanning') or row.get('next_scan_at') == 0]
     failures = []
+    zero_paths = []
     successes = 0
     for index, row in enumerate(pending):
         if row['max_instances'] != 1:
@@ -274,7 +305,17 @@ def scan(api, rows, automatic, timeout, poll, progress, env):
                               ('スキャン中' if status.get('is_scanning') else '開始/終了待機') + f' ({elapsed} 秒)')
                 if result and result['id'] > baseline:
                     if not scanned(result):
-                        raise SetupError(f'{row["dll_path"]}: スキャン失敗または受信 0 局 (履歴 ID {result["id"]})。アンテナ・権限・DVB firmware を確認')
+                        lines = scan_log_lines(env, started_at)
+                        kind = classify_scan_logs(lines)
+                        if kind == 'enumeration':
+                            raise SetupError(f'{row["dll_path"]}: 失敗 (チャンネル列挙に失敗。デバイス権限・ドライバーを確認)')
+                        if kind == 'zero' or (result.get('success') and result.get('channel_count') == 0):
+                            zero_paths.append(row['dll_path'])
+                            for line in lines:
+                                say('recisdb-proxy: ' + line)
+                            progress.show(index + 1, len(pending), f'{row["dll_path"]}: 受信 0 局')
+                            break
+                        raise SetupError(f'{row["dll_path"]}: スキャン失敗 (チャンネル列挙に失敗。デバイス権限・ドライバーを確認)')
                     if not status.get('is_scanning') and status.get('next_scan_at') != 0:
                         latest[row['id']] = result
                         progress.show(index + 1, len(pending), f'{row["dll_path"]}: {result["channel_count"]} 局')
@@ -283,7 +324,15 @@ def scan(api, rows, automatic, timeout, poll, progress, env):
                 if (not status.get('is_scanning') and status.get('last_scan') is not None
                         and (last_scan_before is None or status['last_scan'] > last_scan_before)
                         and (not result or result['id'] <= baseline)):
-                    raise SetupError(f'{row["dll_path"]}: 失敗 (チャンネル列挙に失敗。デバイスの権限・ドライバーを確認)')
+                    lines = scan_log_lines(env, started_at)
+                    kind = classify_scan_logs(lines)
+                    if kind == 'zero':
+                        zero_paths.append(row['dll_path'])
+                        for line in lines:
+                            say('recisdb-proxy: ' + line)
+                        progress.show(index + 1, len(pending), f'{row["dll_path"]}: 受信 0 局')
+                        break
+                    raise SetupError(f'{row["dll_path"]}: 失敗 (チャンネル列挙に失敗。デバイス権限・ドライバーを確認)')
                 if time.monotonic() - started >= timeout:
                     raise SetupError(f'{row["dll_path"]}: {timeout:g} 秒でタイムアウト。サーバーのスキャン予約は継続します。履歴・録画状態を確認してから再実行')
                 time.sleep(poll)
@@ -293,11 +342,14 @@ def scan(api, rows, automatic, timeout, poll, progress, env):
             for line in scan_log_lines(env, started_at):
                 say('recisdb-proxy: ' + line)
             progress.show(index + 1, len(pending), f'{row["dll_path"]}: 失敗。次のチューナーへ')
-    if successes == 0 and failures:
+    for path in zero_paths:
+        say(f'受信 0 局 (アンテナ・分配器・B-CAS ではなく電波の問題)。アンテナ接続を確認: {path}。'
+            'アンテナ未接続なら TUNER_EXCLUDE に追加すると次回から登録しません')
+    if successes == 0 and (failures or zero_paths):
         raise SetupError('全チューナーのスキャンに失敗。原因候補: デバイス権限/GID、ドライバー、アンテナ。'
                          '確認: ls -l /dev/px4video* /dev/dvb/adapter*/*; '
                          'docker compose exec recisdb-proxy id。詳細: ' + ' / '.join(failures))
-    return latest
+    return latest, zero_paths
 
 
 def compose(env, *args, extra=None):
@@ -392,7 +444,7 @@ def lock():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('scan', 'register', 'edcb-count'), nargs='?', default='scan')
+    parser.add_argument('command', choices=('scan', 'register', 'prune', 'edcb-count'), nargs='?', default='scan')
     parser.add_argument('--automatic', action='store_true', help='成功済みスキャンは省略 (setup 用)')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--tui')
@@ -408,15 +460,13 @@ def main():
         return
     with lock():
         env = settings(env_file)
+        patterns = exclusion_patterns(env)
         if args.command == 'register':
             result = subprocess.run(['sh', str(ROOT / 'scripts/gen-tuners.sh')], cwd=ROOT, capture_output=True)
             if result.returncode:
                 raise SetupError('デバイス Compose を再生成できません')
             compose(env, 'up', '-d', '--no-deps', 'recisdb-proxy')
         paths = devices(Path(os.environ.get('TUNERS_COMPOSE_FILE', str(ROOT / 'compose.tuners.yaml'))))
-        if not paths:
-            say('チューナー未検出。USB・ドライバーを確認して make tuners && make scan')
-            return
         database = Path(os.environ.get('RECISDB_DATABASE', str(ROOT / 'data/recisdb/recisdb-proxy.db')))
         private_database(database)
         config = Path(os.environ.get('RECISDB_CONFIG', str(ROOT / 'config/recisdb-proxy/recisdb-proxy.toml')))
@@ -431,7 +481,28 @@ def main():
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(1)
-        rows, added = register(api, paths)
+        if args.command == 'prune':
+            candidates = [row for row in api.call('/api/bondrivers')['bondrivers']
+                          if row['dll_path'].startswith('/dev/') and excluded(row['dll_path'], patterns)]
+            if not candidates:
+                say('除外対象の登録なし')
+                return
+            for row in candidates:
+                say('削除対象: ' + row['dll_path'])
+            if not args.yes:
+                answer = input('除外対象の BonDriver を削除しますか？ [y/N]: ').strip().lower()
+                if answer not in ('y', 'yes'):
+                    say('削除を中止')
+                    return
+            for row in candidates:
+                api.call('/api/bondriver/' + quote(str(row['id']), safe=''), method='DELETE')
+                say('削除: ' + row['dll_path'])
+            return
+        if not paths:
+            register(api, paths, patterns)
+            say('有効なチューナーなし。TUNER_EXCLUDE とデバイス接続を確認')
+            return
+        rows, added = register(api, paths, patterns)
         if args.command == 'register':
             say('登録完了。続けて make scan でスキャン・各サービスに反映')
             return
@@ -447,7 +518,7 @@ def main():
         preflight(env, device_nodes(Path(os.environ.get('TUNERS_COMPOSE_FILE', str(ROOT / 'compose.tuners.yaml')))))
         progress = Progress(args.tui)
         try:
-            latest = scan(api, rows, args.automatic, timeout, args.poll, progress, env)
+            latest, zero_paths = scan(api, rows, args.automatic, timeout, args.poll, progress, env)
         finally:
             progress.close()
         services = api.call('/mirakurun/api/services')

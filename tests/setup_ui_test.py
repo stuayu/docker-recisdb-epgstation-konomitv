@@ -61,6 +61,7 @@ with tempfile.TemporaryDirectory() as temp:
     shutil.copytree(ROOT, repo, ignore=shutil.ignore_patterns('.git', 'data', 'config', '__pycache__', 'backup'))
     bin_dir = base / 'bin'; bin_dir.mkdir()
     dev = base / 'dev'; dev.mkdir()
+    (dev / 'px4video0').touch(); (dev / 'px4video1').touch()
     storage = [base / 'disk one', base / 'disk-two']
     for path in storage:
         path.mkdir()
@@ -71,6 +72,7 @@ with tempfile.TemporaryDirectory() as temp:
     dialog = stub(bin_dir, 'whiptail', '''echo "ui $*" >> "$CALLS"
 case "$*" in
   *--checklist*使うソフト*) echo '"EDCB" "AMATSUKAZE" "HTTPS"' >&2;;
+  *--checklist*使うチューナー*) echo '"0"' >&2;;
   *--checklist*録画先*) python3 -c 'import json,os; print(json.load(open(os.environ["ANSWERS"]))["storage"])' >&2;;
   *--menu*既定の録画先*) echo 0 >&2;;
   *--menu*カードサーバー*) echo local >&2;;
@@ -106,19 +108,33 @@ exit 0''')
                CALLS=str(calls), ANSWERS=str(answers), MOUNT_FIXTURE=str(mounts),
                SETUP_OS='Linux', ENV_FILE=str(repo / '.env'), DEV_DIR=str(dev),
                KONOMITV_SOURCE=str(source), OS_RELEASE_FILE=str(base / 'os-release'))
+    (repo / '.env').write_text('TUNER_EXCLUDE=' + str(dev / 'px4video1') + '\n')
     for key in ('RECORDED_DIR', 'RECORDED_DIRS_JSON', 'AMATSUKAZE', 'EDCB', 'HTTPS', 'BONCAS_MODE', 'GPU'):
         env.pop(key, None)
     (base / 'os-release').write_text('ID=debian\nVERSION_CODENAME=bookworm\n')
     found = subprocess.check_output(['python3', str(repo / 'scripts/storage.py'), 'candidates'], env=env, text=True)
     assert 'ext4 / 200.0 GB' in found and 'nfs / 300.0 GB' in found
     assert '\n/\t' not in '\n' + found and '/run' not in found
-    terminal(['./setup.sh', '--no-build', '--no-start'], repo, env)
+    setup_output = terminal(['./setup.sh', '--no-build', '--no-start'], repo, env)
+    assert (repo / '.env').is_file(), setup_output
     values = dict(line.split('=', 1) for line in (repo / '.env').read_text().splitlines() if '=' in line and not line.startswith('#'))
     assert json.loads(values['RECORDED_DIRS_JSON']) == [str(p) for p in storage]
     assert values['RECORDED_DIR'] == str(storage[0])
     assert 'compose.boncasrelay.yaml' in values['COMPOSE_FILE'] and 'compose.storage.yaml' in values['COMPOSE_FILE']
     assert values['BONCAS_B25_HOST'] == values['BONCAS_4K_HOST'] == 'boncasrelay'
     assert values['BONCAS_B25_PORT'] == values['BONCAS_4K_PORT'] == '6900'
+    assert values['TUNER_EXCLUDE'] == str(dev / 'px4video1')
+    tuner_compose = (repo / 'compose.tuners.yaml').read_text()
+    assert str(dev / 'px4video0') in tuner_compose and str(dev / 'px4video1') not in tuner_compose
+    assert '使うチューナー' in calls.read_text()
+    assert str(dev / 'px4video1') + ' OFF' in calls.read_text()
+    stub(bin_dir, 'nvidia-ctk', 'exit 0')
+    terminal(['./setup.sh', '--yes', '--no-build', '--no-start'], repo,
+             dict(env, TUNER_EXCLUDE='', DRIVER_OK='1', GPU='none'))
+    values = dict(line.split('=', 1) for line in (repo / '.env').read_text().splitlines() if '=' in line and not line.startswith('#'))
+    assert values['TUNER_EXCLUDE'] == ''
+    tuner_compose = (repo / 'compose.tuners.yaml').read_text()
+    assert str(dev / 'px4video0') in tuner_compose and str(dev / 'px4video1') in tuner_compose
     assert values['RUN_UID'] == values['RUN_GID'] == '1000'
     assert values['EDCB_EPGSTATION_ENABLED'] == '1' and values['EDCB_EPGSTATION_ENCODE'] == '0'
     assert 'boncasrelay:6900' in (repo / 'config/recisdb-proxy/recisdb-proxy.toml').read_text()
@@ -136,7 +152,7 @@ exit 0''')
     assert mounts_out['konomitv']['volumes'][0]['target'] == '/host-rootfs/recorded2'
     assert all(v['volumes'][0]['source'] == str(storage[1].resolve()) for v in mounts_out.values())
     log = calls.read_text()
-    assert 'sudo bash' in log and 'install-host.sh px4' in log and 'install-host.sh nvidia' in log, log
+    assert 'sudo bash' in log and 'install-host.sh nvidia' in log, log
     assert 'UFW 有効' in log and '導入手順' not in log  # textbox shows the actual recipe.
     # Reconfiguration preserves settings and uses current values as defaults.
     config = repo / 'config/epgstation/config.yml'
@@ -144,7 +160,7 @@ exit 0''')
     stub(bin_dir, 'nvidia-ctk', 'exit 0')
     calls.write_text('')
     terminal(['./setup.sh', '--reconfigure'], repo, dict(env, DRIVER_OK='1'))
-    assert 'install-host.sh px4' not in calls.read_text() and 'install-host.sh nvidia' not in calls.read_text()
+    assert 'install-host.sh nvidia' not in calls.read_text()
     assert config.read_text() == epg + '# user edit\n'
     # Storage-only skips Docker, GPU and software configuration.
     calls.write_text('')

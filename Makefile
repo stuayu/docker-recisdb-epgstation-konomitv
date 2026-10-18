@@ -1,4 +1,4 @@
-.PHONY: setup status update test config tuners scan build up down logs edcb-chset regen-config backup restore storage
+.PHONY: setup status update test config tuners tuners-prune scan build up down logs edcb-chset regen-config backup restore storage
 
 storage:
 	./setup.sh --storage-only
@@ -32,6 +32,9 @@ config:
 
 tuners:
 	python3 scripts/tuner-setup.py register
+
+tuners-prune:
+	python3 scripts/tuner-setup.py prune $(if $(filter 1 yes true,$(YES)),--yes,)
 
 scan:
 	python3 scripts/tuner-setup.py scan

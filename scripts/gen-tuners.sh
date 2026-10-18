@@ -7,6 +7,9 @@ output=${TUNERS_COMPOSE_FILE:-"$script_dir/compose.tuners.yaml"}
 tmp_file=${output}.tmp
 count=0
 env_file=${ENV_FILE:-"$script_dir/.env"}
+if [ "${TUNER_EXCLUDE+x}" != x ]; then
+  TUNER_EXCLUDE=$(sed -n 's/^TUNER_EXCLUDE=//p' "$env_file" 2>/dev/null | tail -n1 || true)
+fi
 tuner_gids=''
 render_gid=''
 
@@ -17,6 +20,20 @@ mkdir -p "$(dirname "$output")"
 
   add_device() {
     source_path=$1
+    excluded=0
+    old_ifs=$IFS; IFS=,
+    for excluded_pattern in $TUNER_EXCLUDE; do
+      [ -n "$excluded_pattern" ] || continue
+      # shellcheck disable=SC2254
+      case $source_path in $excluded_pattern) excluded=1;; esac
+      case $source_path in "$dev_dir"/dvb/adapter[0-9]*/*)
+        adapter_path=${source_path%/*}
+        # shellcheck disable=SC2254
+        case $adapter_path in $excluded_pattern) excluded=1;; esac
+      esac
+    done
+    IFS=$old_ifs
+    [ "$excluded" -eq 0 ] || return 0
     target_path=${source_path#"$dev_dir"}
     target_path=/dev$target_path
     printf '      - "%s:%s"\n' "$source_path" "$target_path"

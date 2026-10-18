@@ -28,7 +28,7 @@ RECORDED_DIR, GPU (none|intel|nvidia),
 RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, HTTPS (yes|no),
 RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE,
 AMATSUKAZE (yes|no), AMATSUKAZE_WEBUI_PORT, RUN_UID, RUN_GID,
-EDCB (yes|no), EDCB_WEB_PORT, EDCB_HTTPS_PORT, EDCB_TUNER_COUNT,
+EDCB (yes|no), EDCB_WEB_PORT, EDCB_HTTPS_PORT, EDCB_TUNER_COUNT, TUNER_EXCLUDE,
 DASHBOARD_TITLE, BONCASRELAY_WEB_PORT
 EOF
 }
@@ -119,6 +119,7 @@ if ((device_count==0)); then
   ask 'チューナーなしで続けますか (後から make tuners で追加できます)' 'はい'
   [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || exit 1
 else ok "$device_count 個のデバイスノードを検出"; fi
+select_tuners
 
 select_software
 step '録画先を設定'
@@ -367,7 +368,7 @@ fi
 if ((amatsukaze_enabled)); then
   for dir in data input output; do mkdir -p "data/amatsukaze/$dir"; done
 fi
-DEV_DIR="$DEV_DIR" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" ./scripts/gen-tuners.sh >/dev/null || fail 'チューナー Compose を生成できません。' 'scripts/gen-tuners.sh の権限と出力先を確認してください。'
+DEV_DIR="$DEV_DIR" TUNER_EXCLUDE="$tuner_exclude" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" ./scripts/gen-tuners.sh >/dev/null || fail 'チューナー Compose を生成できません。' 'scripts/gen-tuners.sh の権限と出力先を確認してください。'
 source_path=$(get KONOMITV_SOURCE ../KonomiTV); source_path=${KONOMITV_SOURCE:-$source_path}; [[ $source_path = /* ]] || source_path="$ROOT/$source_path"
 if [[ ! -f $source_path/Dockerfile ]]; then
   ask "KonomiTV ソースがありません。$source_path に clone しますか" 'はい'
@@ -425,7 +426,7 @@ else
   scan_args=(--automatic)
   (( ! YES && ! NONINTERACTIVE )) || scan_args+=(--yes)
   [[ -z ${TUI:-} ]] || scan_args+=(--tui "$TUI")
-  ENV_FILE="$ENV_FILE" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" DOCKER_BIN="$docker_cmd" python3 "$ROOT/scripts/tuner-setup.py" "${scan_args[@]}" || message '受信設定が未完了です。アンテナ・ドライバー・権限を確認し、make scan で再試行してください。セットアップは続行します。'
+  ENV_FILE="$ENV_FILE" TUNER_EXCLUDE="$tuner_exclude" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" DOCKER_BIN="$docker_cmd" python3 "$ROOT/scripts/tuner-setup.py" "${scan_args[@]}" || message '受信設定が未完了です。アンテナ・ドライバー・権限を確認し、make scan で再試行してください。セットアップは続行します。'
 fi
 step 'アクセス先と次の作業'
 printf '%s' "$dashboard_urls"

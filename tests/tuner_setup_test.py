@@ -154,6 +154,13 @@ if os.environ.get('FAIL_RESTART') == '1' and 'restart' in sys.argv:
                     raise AssertionError(self.path)
                 self.reply({'success': True})
 
+            def do_DELETE(self):
+                if not self.authorized():
+                    return
+                key = int(urlsplit(self.path).path.rsplit('/', 1)[1])
+                owner.drivers[:] = [row for row in owner.drivers if row['id'] != key]
+                self.reply({'success': True})
+
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -166,10 +173,11 @@ if os.environ.get('FAIL_RESTART') == '1' and 'restart' in sys.argv:
         self.env.pop('COMPOSE_FILE', None)
         subprocess.run(['sh', str(self.repo / 'scripts/gen-tuners.sh')], env=self.env, check=True, capture_output=True)
 
-    def run_cli(self, *args, success=True, extra=None):
+    def run_cli(self, *args, success=True, extra=None, input_text=None):
         result = subprocess.run(['python3', str(self.repo / 'scripts/tuner-setup.py'), *args,
                                  '--poll', '.01', '--timeout', '.15', '--ready-timeout', '.05'],
-                                env=dict(self.env, **(extra or {})), capture_output=True, text=True, timeout=15)
+                                env=dict(self.env, **(extra or {})), input=input_text,
+                                capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0 if success else 1, result.stdout + result.stderr)
         self.assertNotIn(SECRET, result.stdout + result.stderr)
         if self.log.exists():
@@ -239,6 +247,51 @@ esac
         settings = dict(line.split('=', 1) for line in self.env_file.read_text().splitlines() if '=' in line)
         self.assertEqual(settings['TUNER_GIDS'], '44')
 
+    def test_exclusion_exact_glob_dvb_adapter_and_gids(self):
+        stat = self.repo / 'stat'
+        stat.write_text('''#!/bin/sh
+case $3 in
+  *px4video*) echo 44;;
+  *frontend*) echo 46;;
+  *demux*) echo 45;;
+  *dvr*) echo 47;;
+  *) exit 1;;
+esac
+''')
+        stat.chmod(0o755)
+        patterns = ','.join((str(self.dev / 'px4video0'), str(self.dev / 'px4video[12]'),
+                             str(self.dev / 'dvb/adapter0')))
+        env = dict(self.env, PATH=str(self.repo) + ':' + os.environ['PATH'], TUNER_EXCLUDE=patterns)
+        subprocess.run(['sh', str(self.repo / 'scripts/gen-tuners.sh')], env=env, check=True, capture_output=True)
+        compose = (self.repo / 'compose.tuners.yaml').read_text()
+        self.assertIn(str(self.dev / 'px4video3'), compose)
+        for excluded_path in ('px4video0', 'px4video1', 'px4video2', 'dvb/adapter0/frontend0',
+                              'dvb/adapter0/demux0', 'dvb/adapter0/dvr0'):
+            self.assertNotIn(str(self.dev / excluded_path), compose)
+        settings = dict(line.split('=', 1) for line in self.env_file.read_text().splitlines() if '=' in line)
+        self.assertEqual(settings['TUNER_GIDS'], '44')
+
+    def test_registered_excluded_warning_and_prune_confirmation(self):
+        self.run_cli('register')
+        target = self.drivers[1]['dll_path']
+        pattern = target.replace('video3', 'video[23]')
+        output = self.run_cli('register', extra={'TUNER_EXCLUDE': pattern})
+        self.assertIn('登録済みだが除外対象: ' + target, output)
+        target = '/dev/px4video0'
+        pattern = target
+        self.drivers[1]['dll_path'] = target
+        output = self.run_cli('prune', extra={'TUNER_EXCLUDE': pattern}, input_text='n\n')
+        self.assertIn('削除対象: ' + target, output)
+        self.assertIn('削除を中止', output)
+        self.assertEqual(len(self.drivers), 5)
+        output = self.run_cli('prune', extra={'TUNER_EXCLUDE': pattern}, input_text='yes\n')
+        self.assertIn('削除: ' + target, output)
+        self.assertEqual(len(self.drivers), 4)
+        self.drivers.append(dict(self.drivers[0], id=99, dll_path=target))
+        output = self.run_cli('prune', '--yes', extra={'TUNER_EXCLUDE': pattern})
+        self.assertIn('削除: ' + target, output)
+        self.assertEqual(len(self.drivers), 4)
+
     def test_scan_wait_chset_reload_and_setup_second_run(self):
         output = self.run_cli('--automatic')
         self.assertIn('5/5 台完了', output)
@@ -302,6 +355,19 @@ esac
         self.assertIn('perform_scan: Failed to enumerate spaces/channels', output)
         self.assertNotIn('unrelated', output)
         self.assertLess(self.progress_reads, 25)
+
+    def test_zero_channels_logs_are_reported_separately(self):
+        self.run_cli('register')
+        for row in self.drivers:
+            row['last_scan'] = int(time.time()) - 10
+        self.mode = 'last_scan'
+        logs = '\n'.join(f'[WARN perform_scan: no signal/carrier on channel {channel}]' for channel in range(4))
+        logs += '\n[INFO] Total channels found: 0'
+        output = self.run_cli('scan', success=False, extra={'MOCK_SCAN_LOG': logs})
+        self.assertIn('受信 0 局 (アンテナ・分配器・B-CAS ではなく電波の問題)。アンテナ接続を確認: '
+                      + self.drivers[0]['dll_path'], output)
+        self.assertIn('アンテナ未接続なら TUNER_EXCLUDE に追加', output)
+        self.assertNotIn('チャンネル列挙に失敗', output)
 
     def test_preflight_denies_unreadable_device_before_scan(self):
         output = self.run_cli('scan', success=False, extra={'FAIL_PREFLIGHT': '1'})

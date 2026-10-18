@@ -30,6 +30,12 @@
 
 DVB は `dll_path` を `/dev/dvb/adapter0/frontend0` に置き換えます。名前・グループ・最大同時数等の既存設定は上書きしません。最大同時数が1以外なら警告し、スキャン前に修正を求めます。USB が消えた登録は警告して保持します。再列挙・故障・一時切断を区別できず、登録削除は局設定にも影響するためです。物理チューナーの識別に使うシリアル番号等は今回の API にありません。
 
+## 1.1 使用デバイスの選択と除外
+
+`.env` の `TUNER_EXCLUDE` にカンマ区切りでパスまたは glob を指定します。例: `TUNER_EXCLUDE=/dev/dvb/adapter0,/dev/px4video0`。DVB は `/dev/dvb/adapterN` 単位で frontend/demux/dvr をまとめて除外し、`/dev/dvb/adapter*` も使えます。setup の対話画面は検出デバイスをチェックリストで表示し、既定は全選択、既存の除外指定を初期状態に反映します。`--yes` では環境変数 `TUNER_EXCLUDE` を優先し、未設定なら `.env` の値を使います。
+
+除外デバイスは `compose.tuners.yaml` に渡さず、`TUNER_GIDS` の収集・自動登録・スキャンから外します。既に登録されている除外デバイスは自動削除せず、path を表示します。BonDriver 画面で削除するか、`make tuners-prune` で対象一覧を確認後に API 削除できます。確認省略は `make tuners-prune YES=1`。既存の局や予約への影響を確認してから実行してください。
+
 スキャン順の `scan_priority=0` と、視聴・録画リクエストの優先度は別です。pool は SCAN=0 / VIEWING=10 / RECORDING_NORMAL=200 / RECORDING_EXCLUSIVE=255 を定義し、局選択priorityのDB既定値は0です。本セットアップはこれらの配信優先度や既存局priorityを変更しません。根拠: `proxy/tuner/pool.rs:81-87`、`proxy/database/schema.rs:17,58-59`。
 
 ## 2. 既存の検出・登録機構と選択理由
@@ -61,7 +67,7 @@ API と完了条件の根拠: `proxy/web/mod.rs:135-160`、`proxy/web/api/bondri
 
 上流の注意点:
 
-- 全空間が空でも成功履歴になり得ます。0局をこちらで失敗扱いにします。さらに上流のmergeは見つからない既存局を無効化するため、アンテナ未接続で再スキャンするとproxy内の旧局は無効化され得ます。ChSetファイルは保持しますが、DBまでは復元しません。根拠: `proxy/scheduler/scan_scheduler.rs:1383-1413`、`proxy/database/channel.rs:1005-1022`。
+- 全空間が空でも `last_scan` だけ更新され、scan_history に行が作られない場合があります。ログの `no signal/carrier` 多数または `Total channels found: 0` は受信 0 局としてアンテナ接続を案内し、`Permission denied` / `Failed to enumerate` は権限・ドライバーの列挙失敗として分けます。受信 0 局の path は最後に表示し、未接続なら `TUNER_EXCLUDE` へ追加します。上流のmergeは見つからない既存局を無効化するため、アンテナ未接続で再スキャンするとproxy内の旧局は無効化され得ます。ChSetファイルは保持しますが、DBまでは復元しません。根拠: `proxy/scheduler/scan_scheduler.rs:1383-1413`、`proxy/database/channel.rs:1005-1022`。
 - エラー・タイムアウト時は失敗履歴を書きますが `next_scan_at` を解消していません。予約は後のtickで再試行される場合があります。後続のscanを新たに積まず、原因修正と `make scan` の再実行を案内します。根拠: `proxy/scheduler/scan_scheduler.rs:271-288`、`proxy/database/bon_driver.rs:199-204`。
 - クライアント側の待機タイムアウトはサーバーのスキャンをキャンセルしません。スキャンと通常配信が使う slot の競合は上流が扱いますが、利用者がAPI/Web画面から同時に別操作することまではローカルlockで防げません。
 
