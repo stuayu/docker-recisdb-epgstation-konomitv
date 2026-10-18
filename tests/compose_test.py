@@ -11,69 +11,84 @@ from storage import mounts
 
 root = Path(__file__).resolve().parents[1]
 binary = os.environ.get('COMPOSE_BIN', 'docker-compose')
-env = dict(os.environ, MARIADB_PASSWORD='compose-test', MARIADB_ROOT_PASSWORD='compose-root-test')
+env = dict(os.environ, MARIADB_PASSWORD='compose-test', MARIADB_ROOT_PASSWORD='compose-root-test',
+           TUNER_GIDS='44,45', RENDER_GID='110')
 # Ignore a caller's selected default overrides: this test supplies every file.
 env.pop('COMPOSE_FILE', None)
 env.pop('COMPOSE_PROFILES', None)
-for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, True), (False, True), (False, True), ('none', 'intel', 'nvidia')):
-    files = ['compose.yaml']
-    if gpu != 'none':
-        files.append(f'compose.{gpu}.yaml')
-    if https:
-        files.append('compose.https.yaml')
-    if amatsukaze:
-        files.append('compose.amatsukaze.yaml')
+with tempfile.TemporaryDirectory() as temp:
+    tuner_override = Path(temp) / 'compose.tuners.yaml'
+    tuner_override.write_text('services:\n  recisdb-proxy:\n    devices: []\n    group_add: ["44", "45"]\n')
+    for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, True), (False, True), (False, True), ('none', 'intel', 'nvidia')):
+        files = ['compose.yaml', str(tuner_override)]
         if gpu != 'none':
-            files.append(f'compose.amatsukaze.{gpu}.yaml')
-    if edcb:
-        files.append('compose.edcb.yaml')
+            files.append(f'compose.{gpu}.yaml')
         if https:
-            files.append('compose.edcb.https.yaml')
-    if relay:
-        files.append('compose.boncasrelay.yaml')
-    command = [binary, '--env-file', '.env.example']
-    for file in files:
-        command.extend(['-f', file])
-    output = subprocess.run(command + ['config', '--format', 'json'], cwd=root, env=env,
-                            capture_output=True, text=True, check=True)
-    config = json.loads(output.stdout)
-    services = config['services']
-    assert ('boncasrelay' in services) == relay
-    if relay:
-        card = services['boncasrelay']
-        assert [p['target'] for p in card['ports']] == [6980]
-        assert card['ports'][0]['host_ip'] == '127.0.0.1'
-        assert 'c 189:* rw' in card['device_cgroup_rules']
-        assert not config['networks']['default'].get('ipam')
-        assert not card.get('privileged')
-    assert ('edcb' in services) == edcb
-    assert ('amatsukaze' in services) == amatsukaze
-    assert ('https-gateway' in services) == https
-    db = services['mariadb']
-    assert db['image'] == 'mariadb:latest' and not db.get('profiles')
-    assert db['environment']['MARIADB_AUTO_UPGRADE'] == '1'
-    assert not db.get('ports')
-    assert services['epgstation']['depends_on']['mariadb']['condition'] == 'service_healthy'
-    capture = next(v for v in services['konomitv']['volumes'] if v['target'] == '/host-rootfs/data/konomitv-capture')
-    assert capture['source'].endswith('/data/konomitv-capture') and not capture.get('read_only', False)
-    if edcb:
-        assert services['edcb']['build']['args']['EDCB_REF'] == 'my-build'
-        assert services['edcb']['build']['args']['EDCB_WEBUI_REF'] == 'E3'
-        assert services['edcb']['environment']['RECISDB_CONFIG'] == '/recisdb-proxy.toml'
-        auth_config = next(v for v in services['edcb']['volumes'] if v['target'] == '/recisdb-proxy.toml')
-        assert auth_config['read_only']
-        assert any(v['target'] == '/recorded' for v in services['edcb']['volumes'])
-        assert services['edcb']['stop_grace_period'] == '50s'
-    if https:
-        gateway = services['https-gateway']
-        assert ('edcb' in gateway['depends_on']) == edcb
-        assert ('8553=http://edcb:5510/' in gateway['environment']['AKEBI_ROUTES']) == edcb
-        assert any(p['target'] == 8553 for p in gateway['ports']) == edcb
-    if amatsukaze:
-        assert services['epgstation']['environment']['AMATSUKAZE_ENABLED'] == '1'
-        ama = services['amatsukaze']
-        assert bool(ama.get('devices')) == (gpu == 'intel')
-        assert bool(ama.get('deploy', {}).get('resources', {}).get('reservations', {}).get('devices')) == (gpu == 'nvidia')
+            files.append('compose.https.yaml')
+        if amatsukaze:
+            files.append('compose.amatsukaze.yaml')
+            if gpu != 'none':
+                files.append(f'compose.amatsukaze.{gpu}.yaml')
+        if edcb:
+            files.append('compose.edcb.yaml')
+            if https:
+                files.append('compose.edcb.https.yaml')
+        if relay:
+            files.append('compose.boncasrelay.yaml')
+        command = [binary, '--env-file', '.env.example']
+        for file in files:
+            command.extend(['-f', file])
+        output = subprocess.run(command + ['config', '--format', 'json'], cwd=root, env=env,
+                                capture_output=True, text=True, check=True)
+        config = json.loads(output.stdout)
+        services = config['services']
+        assert set(services['recisdb-proxy']['group_add']) >= {'44', '45'}
+        assert ('boncasrelay' in services) == relay
+        if gpu == 'intel':
+            assert services['epgstation']['group_add'] == ['110']
+            assert services['konomitv']['group_add'] == ['110']
+            if amatsukaze:
+                assert services['amatsukaze']['group_add'] == ['110']
+        else:
+            assert not services['epgstation'].get('group_add')
+            assert not services['konomitv'].get('group_add')
+            if amatsukaze:
+                assert not services['amatsukaze'].get('group_add')
+        if relay:
+            card = services['boncasrelay']
+            assert [p['target'] for p in card['ports']] == [6980]
+            assert card['ports'][0]['host_ip'] == '127.0.0.1'
+            assert 'c 189:* rw' in card['device_cgroup_rules']
+            assert not config['networks']['default'].get('ipam')
+            assert not card.get('privileged')
+        assert ('edcb' in services) == edcb
+        assert ('amatsukaze' in services) == amatsukaze
+        assert ('https-gateway' in services) == https
+        db = services['mariadb']
+        assert db['image'] == 'mariadb:latest' and not db.get('profiles')
+        assert db['environment']['MARIADB_AUTO_UPGRADE'] == '1'
+        assert not db.get('ports')
+        assert services['epgstation']['depends_on']['mariadb']['condition'] == 'service_healthy'
+        capture = next(v for v in services['konomitv']['volumes'] if v['target'] == '/host-rootfs/data/konomitv-capture')
+        assert capture['source'].endswith('/data/konomitv-capture') and not capture.get('read_only', False)
+        if edcb:
+            assert services['edcb']['build']['args']['EDCB_REF'] == 'my-build'
+            assert services['edcb']['build']['args']['EDCB_WEBUI_REF'] == 'E3'
+            assert services['edcb']['environment']['RECISDB_CONFIG'] == '/recisdb-proxy.toml'
+            auth_config = next(v for v in services['edcb']['volumes'] if v['target'] == '/recisdb-proxy.toml')
+            assert auth_config['read_only']
+            assert any(v['target'] == '/recorded' for v in services['edcb']['volumes'])
+            assert services['edcb']['stop_grace_period'] == '50s'
+        if https:
+            gateway = services['https-gateway']
+            assert ('edcb' in gateway['depends_on']) == edcb
+            assert ('8553=http://edcb:5510/' in gateway['environment']['AKEBI_ROUTES']) == edcb
+            assert any(p['target'] == 8553 for p in gateway['ports']) == edcb
+        if amatsukaze:
+            assert services['epgstation']['environment']['AMATSUKAZE_ENABLED'] == '1'
+            ama = services['amatsukaze']
+            assert bool(ama.get('devices')) == (gpu == 'intel')
+            assert bool(ama.get('deploy', {}).get('resources', {}).get('reservations', {}).get('devices')) == (gpu == 'nvidia')
 print('PASS: real Docker Compose config matrix (48 combinations: BonCasRelay x EDCB x Amatsukaze x HTTPS x GPU)')
 
 with tempfile.TemporaryDirectory() as temp:

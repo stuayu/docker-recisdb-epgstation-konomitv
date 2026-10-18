@@ -223,7 +223,7 @@ sudo usermod -aG video "$USER"
 
 #### GPU (任意)
 
-Intel / AMD はホストに `/dev/dri/renderD128` 等があることを確認します。デバイスの group が `render` の場合は、その GID でアクセスできることが必要です。setup.sh は `render` group GID を `VIDEO_GID` に設定します。KonomiTV Dockerfile には Intel Media Driver (`intel-media-va-driver-non-free` 等) が含まれるため、Intel QSV / VAAPI 用ユーザー空間パッケージをホストへ重ねて入れる必要はありません。AMD VCE は [KonomiTV README の AMDGPU-PRO driver 節](https://github.com/stuayu/KonomiTV#linux---vceencc)を確認してください。
+Intel / AMD はホストに `/dev/dri/renderD128` 等があることを確認します。setup.sh は GPU デバイスの所有 GID を `RENDER_GID` に保存し、KonomiTV・EPGStation・Amatsukaze に渡します。チューナーデバイスはノードごとの所有 GID を `TUNER_GIDS` に保存し、recisdb-proxy に渡します。`make tuners` は USB や DVB デバイスの追加後に GID と Compose を再生成します。KonomiTV Dockerfile には Intel Media Driver (`intel-media-va-driver-non-free` 等) が含まれるため、Intel QSV / VAAPI 用ユーザー空間パッケージをホストへ重ねて入れる必要はありません。AMD VCE は [KonomiTV README の AMDGPU-PRO driver 節](https://github.com/stuayu/KonomiTV#linux---vceencc)を確認してください。
 
 ```bash
 ls -l /dev/dri/renderD*
@@ -316,7 +316,7 @@ cd docker-recisdb-epgstation-konomitv
 ./scripts/gen-tuners.sh
 ```
 
-`.env` の `BONCAS_B25_HOST`、`BONCAS_B25_PORT`、`BONCAS_4K_HOST`、`BONCAS_4K_PORT`、`RECORDED_DIR`、`VIDEO_GID`、`KONOMITV_SOURCE` を環境に合わせます。BonCasRelay は APDU を判定して B-CAS / ACAS を既定の同じ 6900 番ポートへ振り分けるため、同じホスト・ポートを設定できます。`VIDEO_GID` はホストの `video` グループ ID です。
+`.env` の `BONCAS_B25_HOST`、`BONCAS_B25_PORT`、`BONCAS_4K_HOST`、`BONCAS_4K_PORT`、`RECORDED_DIR`、`TUNER_GIDS`、`RENDER_GID`、`KONOMITV_SOURCE` を環境に合わせます。通常は `make tuners` と setup.sh がデバイスの所有 GID を再計算します。旧 `VIDEO_GID` は廃止し、Intel 設定時の値は `RENDER_GID` に移行します。
 
 ```bash
 docker compose config
@@ -365,7 +365,7 @@ EPGStation の DB は MariaDB 固定です。設定ファイルは `setup.sh` �
 | --- | --- | --- |
 | チャンネルが映らない | チャンネルスキャン未実施、受信状態、チューナー登録不備 | `make scan` で再試行。デバイス変更時は先に `make tuners`。ログとアンテナ受信を確認 |
 | B25 復号できない | BonCasRelay 未起動、接続元許可漏れ、カード未認識 | `BONCAS_B25_HOST:PORT` へ TCP 接続できるか確認。Relay の `--allow` と Web 設定のリーダー判定を確認 |
-| チューナーが見えない | デバイスノードなし、udev 権限、生成 Compose が古い | `ls /dev`、`VIDEO_GID`、`make tuners`、`docker compose config` を確認 |
+| チューナーが見えない | デバイスノードなし、udev 権限、生成 Compose が古い | `ls -l /dev/px4video* /dev/dvb/adapter*/*`、`TUNER_GIDS`、`docker compose exec recisdb-proxy id`、`make tuners` を確認 |
 | KonomiTV が Mirakurun URL を拒否 | `/mirakurun/api/tuners` が Mirakurun 互換 `Server: Mirakurun/...` ヘッダーを返さない | recisdb-proxy の互換 API 応答と `http://recisdb-proxy:40080/mirakurun` を確認 |
 | HTTPS 経路に接続できない | `compose.https.yaml` が `COMPOSE_FILE` にない、ポート競合、Keyless 通信失敗 | `.env` の Compose 構成と HTTPS ポート、`docker compose logs https-gateway` を確認 |
 | HTTPS の証明書を取得できない | DNS / Keyless Server への接続不可、Keyless Server の停止 | 外部 DNS と `AKEBI_KEYLESS_SERVER_URL` を確認。自前サーバー利用時は URL を合わせる |

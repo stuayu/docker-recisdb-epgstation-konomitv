@@ -254,6 +254,42 @@ with tempfile.TemporaryDirectory() as temp:
 
 print('PASS: config first-run generation, KonomiTV Windows path migration/backup, regen backup/diff/inode, unsafe values, backup excludes recorded files, restore imports dump')
 
+# EDCB access defaults migrate only when the old values are exact matches.
+with tempfile.TemporaryDirectory() as temp:
+    base = Path(temp)
+    repo = make_repo(base / 'edcb-access')
+    env = write_env(repo / '.env', compose='compose.yaml:compose.tuners.yaml:compose.edcb.yaml')
+    config = repo / 'config/edcb'
+    (config / 'Setting').mkdir(parents=True)
+    old_acl = '+127.0.0.1,+10.0.0.0/8,+172.16.0.0/12,+192.168.0.0/16'
+    timer = config / 'EpgTimerSrv.ini'
+    timer.write_text('[SET]\nHttpAccessControlList=' + old_acl + '\nUser=kept\n')
+    public = config / 'Setting/HttpPublic.ini'
+    public.write_bytes('[SET]\nALLOW_SETTING_LIST=127.0.0.1,::1\n'.encode() + '名前=維持\n'.encode('shift_jis'))
+    out = render(repo, env, ['first-run']).stdout
+    assert '+100.64.0.0/10' in timer.read_text()
+    assert 'ALLOW_SETTING_LIST=\n' in public.read_bytes().decode('shift_jis')
+    assert '名前=維持' in public.read_bytes().decode('shift_jis')
+    assert list(config.glob('EpgTimerSrv.ini.pre-config-migration'))
+    assert list((config / 'Setting').glob('HttpPublic.ini.pre-config-migration'))
+    assert 'HttpAccessControlList の既定値を移行' in out
+
+    custom = make_repo(base / 'edcb-access-custom')
+    custom_env = write_env(custom / '.env', compose='compose.yaml:compose.tuners.yaml:compose.edcb.yaml')
+    custom_dir = custom / 'config/edcb'
+    (custom_dir / 'Setting').mkdir(parents=True)
+    custom_timer = custom_dir / 'EpgTimerSrv.ini'
+    custom_timer.write_text('[SET]\nHttpAccessControlList=+127.0.0.1,+192.168.10.0/24\n')
+    custom_public = custom_dir / 'Setting/HttpPublic.ini'
+    custom_public.write_text('[SET]\nALLOW_SETTING_LIST=127.0.0.1,192.168.10.9\n')
+    out = render(custom, custom_env, ['first-run']).stdout
+    assert custom_timer.read_text().endswith('+192.168.10.0/24\n')
+    assert custom_public.read_text().endswith('127.0.0.1,192.168.10.9\n')
+    assert not list(custom_dir.glob('EpgTimerSrv.ini.pre-config-migration'))
+    assert not list((custom_dir / 'Setting').glob('HttpPublic.ini.pre-config-migration'))
+    assert 'Tailscale から使う場合' in out
+print('PASS: EDCB Tailscale ACL and exact-default HttpPublic access migration')
+
 # Optional configurations and migration preserve runtime databases and user settings.
 with tempfile.TemporaryDirectory() as temp:
     base = Path(temp)

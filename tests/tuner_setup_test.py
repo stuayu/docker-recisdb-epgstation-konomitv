@@ -48,6 +48,12 @@ class ProvisionTest(unittest.TestCase):
 import json, os, pathlib, subprocess, sys
 with open(os.environ['COMMAND_LOG'], 'a') as log:
     log.write(json.dumps(sys.argv[1:]) + '\\n')
+if 'logs' in sys.argv:
+    print(os.environ.get('MOCK_SCAN_LOG', ''))
+    sys.exit(0)
+if 'exec' in sys.argv and os.environ.get('FAIL_PREFLIGHT') == '1':
+    if sys.argv[-1] == 'id': print('uid=1000 groups=1000,110')
+    sys.exit(1)
 if sys.argv[-1] == 'edcb-chset':
     result = subprocess.run([sys.executable, 'docker/edcb/chset.py', '--refresh'], env=dict(os.environ, EDCB_CONFIG_DIR=str(pathlib.Path('config/edcb').resolve())))
     sys.exit(result.returncode)
@@ -110,11 +116,13 @@ if os.environ.get('FAIL_RESTART') == '1' and 'restart' in sys.argv:
                         owner.active[key] += 1
                         if owner.mode != 'timeout' and owner.active[key] >= 3:
                             owner.history_id += 1
-                            owner.histories.setdefault(key, []).append({'id': owner.history_id,
-                                'bon_driver_id': key, 'success': owner.mode != 'failure',
-                                'channel_count': 0 if owner.mode in ('zero', 'failure') else 1,
-                                'error_message': SECRET})
-                            row.update(is_scanning=False, next_scan_at=None, last_scan=int(time.time()))
+                            if owner.mode != 'last_scan':
+                                owner.histories.setdefault(key, []).append({'id': owner.history_id,
+                                    'bon_driver_id': key, 'success': owner.mode != 'failure',
+                                    'channel_count': 0 if owner.mode in ('zero', 'failure') else 1,
+                                    'error_message': SECRET})
+                            row.update(is_scanning=False, next_scan_at=None,
+                                       last_scan=max(int(time.time()), (row.get('last_scan') or 0) + 1))
                             del owner.active[key]
                     self.reply({'success': True, 'bondriver': row})
                 elif path == '/mirakurun/api/services':
@@ -193,11 +201,49 @@ if os.environ.get('FAIL_RESTART') == '1' and 'restart' in sys.argv:
         self.assertEqual(len(self.drivers), 5)
         self.assertIn(['compose', 'up', '-d', '--no-deps', 'recisdb-proxy'], self.commands())
 
+    def test_gen_tuners_collects_multiple_owner_gids_and_migrates_env(self):
+        stat = self.repo / 'stat-stub'
+        stat.write_text('''#!/bin/sh
+case $3 in
+  *px4video*) echo 44;;
+  *frontend*) echo 46;;
+  *demux*) echo 45;;
+  *dvr*) echo 44;;
+  *renderD*) echo 110;;
+  *) exit 1;;
+esac
+''')
+        stat.chmod(0o755)
+        env_text = self.env_file.read_text()
+        env_text += 'VIDEO_GID=77\nCOMPOSE_FILE=compose.yaml:compose.intel.yaml\n'
+        self.env_file.write_text(env_text)
+        env = dict(self.env, PATH=str(self.repo) + ':' + os.environ['PATH'])
+        stat.rename(self.repo / 'stat')
+        subprocess.run(['sh', str(self.repo / 'scripts/gen-tuners.sh')], env=env, check=True, capture_output=True)
+        compose = (self.repo / 'compose.tuners.yaml').read_text()
+        self.assertRegex(compose, r'group_add:\n(?:      - "(?:44|45|46)"\n){3}')
+        settings = dict(line.split('=', 1) for line in self.env_file.read_text().splitlines() if '=' in line)
+        self.assertEqual(settings['TUNER_GIDS'], '44,46,45')
+        self.assertEqual(settings['RENDER_GID'], '77')
+        self.assertNotIn('VIDEO_GID', settings)
+
+    def test_gen_tuners_uses_video_gid_when_no_devices(self):
+        shutil.rmtree(self.dev)
+        self.dev.mkdir()
+        getent = self.repo / 'getent'
+        getent.write_text('#!/bin/sh\nprintf "video:x:44:\\n"\n')
+        getent.chmod(0o755)
+        env = dict(self.env, PATH=str(self.repo) + ':' + os.environ['PATH'])
+        subprocess.run(['sh', str(self.repo / 'scripts/gen-tuners.sh')], env=env, check=True, capture_output=True)
+        self.assertIn('      - "44"', (self.repo / 'compose.tuners.yaml').read_text())
+        settings = dict(line.split('=', 1) for line in self.env_file.read_text().splitlines() if '=' in line)
+        self.assertEqual(settings['TUNER_GIDS'], '44')
+
     def test_scan_wait_chset_reload_and_setup_second_run(self):
         output = self.run_cli('--automatic')
         self.assertIn('5/5 台完了', output)
         self.assertGreaterEqual(self.progress_reads, 15)
-        commands = self.commands()
+        commands = [command for command in self.commands() if 'exec' not in command]
         self.assertIn(['compose', 'stop', 'edcb'], commands)
         self.assertIn(['compose', 'run', '--rm', '--no-deps', 'edcb', 'edcb-chset'], commands)
         self.assertIn(['compose', 'up', '-d', '--no-deps', 'edcb'], commands)
@@ -215,7 +261,7 @@ if os.environ.get('FAIL_RESTART') == '1' and 'restart' in sys.argv:
         output = self.run_cli('--automatic')
         self.assertIn('登録・スキャン・反映済み', output)
         self.assertEqual(len(self.posts), posts)
-        self.assertEqual(self.commands(), commands)
+        self.assertEqual([command for command in self.commands() if 'exec' not in command], commands)
         # Explicit scan always rescans, even after successful setup.
         self.run_cli('scan')
         self.assertEqual(len(self.posts), posts + 5)
@@ -237,11 +283,31 @@ if os.environ.get('FAIL_RESTART') == '1' and 'restart' in sys.argv:
                 self.assertIn(expected, output)
                 self.assertIn('make scan', output)
                 self.assertEqual(path.read_text(), 'existing')
-                self.assertFalse(self.commands())
+                self.assertFalse(any('restart' in command for command in self.commands()))
                 # Simulate operator resolving the prior pending server scan.
                 self.active.clear()
                 for row in self.drivers:
                     row.update(is_scanning=False, next_scan_at=None)
+
+    def test_last_scan_without_history_fails_immediately_and_logs_are_filtered(self):
+        self.run_cli('register')
+        for row in self.drivers:
+            row['last_scan'] = int(time.time()) - 10
+        self.mode = 'last_scan'
+        safe = '[WARN perform_scan: Failed to enumerate spaces/channels: Permission denied]'
+        unsafe = '[ERROR unrelated: ' + SECRET + ']'
+        output = self.run_cli('scan', success=False, extra={'MOCK_SCAN_LOG': '\n'.join((safe, unsafe))})
+        self.assertIn('全チューナーのスキャンに失敗', output)
+        self.assertIn('チャンネル列挙に失敗', output)
+        self.assertIn('perform_scan: Failed to enumerate spaces/channels', output)
+        self.assertNotIn('unrelated', output)
+        self.assertLess(self.progress_reads, 25)
+
+    def test_preflight_denies_unreadable_device_before_scan(self):
+        output = self.run_cli('scan', success=False, extra={'FAIL_PREFLIGHT': '1'})
+        self.assertIn('デバイスをコンテナから読み書きできません', output)
+        self.assertIn('groups: uid=1000 groups=1000,110', output)
+        self.assertFalse(any(command[-1].endswith('/scan') for command in self.commands()))
 
     def test_api_errors_and_failed_service_refresh_retry(self):
         self.invalid = True

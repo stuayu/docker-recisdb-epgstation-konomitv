@@ -43,7 +43,7 @@ DVB は `dll_path` を `/dev/dvb/adapter0/frontend0` に置き換えます。名
 ## 3. スキャン API と反映経路
 
 1. `GET /api/bondrivers` で既存を取得し、未登録 path のみ `POST /api/bondriver` で登録します。
-2. `GET /api/scan-history?bondriver_id=N` の最大履歴 ID を保存します。
+2. `GET /api/scan-history?bondriver_id=N` の最大履歴 ID と `GET /api/bondriver/N` の `last_scan` を保存します。
 3. `POST /api/bondriver/N/scan` で一度だけ予約します。既に `is_scanning=true` / `next_scan_at=0` なら現在の予約を待ちます。この POST は開始・完了を保証せず、DB の `next_scan_at=0` を設定するだけです。
 4. `GET /api/bondriver/N` と履歴を既定5秒間隔で取得します。新しい履歴 ID・`success=true`・`channel_count>0`・スキャン終了・即時予約解消を確認します。過去の成功履歴で完了扱いにしません。細かいチャンネル進捗 API はありません。完了台数・経過秒と状態を行表示し、TUI では台数ゲージを併用します。
 5. 全台成功後に Mirakurun channels/services が空でないことを確認します。EDCB を止める前に既存 `chset.py.generate()` で targets/ChSet を検証し、`scripts/edcb-chset.sh` で再取得・配置・再起動します。失敗時は既存 ChSet を保持し、setup 自体は警告後に続行します。
@@ -51,7 +51,7 @@ DVB は `dll_path` を `/dev/dvb/adapter0/frontend0` に置き換えます。名
 
 API と完了条件の根拠: `proxy/web/mod.rs:135-160`、`proxy/web/api/bondrivers.rs:20-38,420-486`、`proxy/database/bon_driver.rs:186-204,274-291`。
 
-スキャンは DB の空間を限定条件にせず、backend が列挙した全空間を調べます。成功時は `merge_scan_results` で局を更新し履歴を書き、scheduler が `last_scan` と次回予約を更新します。Mirakurun はそのDBから有効かつ物理割当済みのサービスを重複排除して返すため、proxy の再起動は不要です。targets も同じ局DBを読んでドライバー別の有効チャンネル数を返し、ChSet API は client-view を生成します。根拠: `proxy/scheduler/scan_scheduler.rs:1281-1305,1348-1413,248-269`、`proxy/database/channel.rs:851-890,1005-1022`、`proxy/web/mirakurun.rs:704-715,785-810,875-950`、`proxy/web/api/client_view.rs:35-115,244-290`。
+スキャンは DB の空間を限定条件にせず、backend が列挙した全空間を調べます。成功時は `merge_scan_results` で局を更新し履歴を書き、scheduler が `last_scan` と次回予約を更新します。履歴が増えず `last_scan` だけ進みスキャン終了した場合は、チャンネル列挙失敗として次のチューナーへ進みます。デバイスの読み書き権限はスキャン開始前にコンテナ内で確認します。Mirakurun はそのDBから有効かつ物理割当済みのサービスを重複排除して返すため、proxy の再起動は不要です。targets も同じ局DBを読んでドライバー別の有効チャンネル数を返し、ChSet API は client-view を生成します。根拠: `proxy/scheduler/scan_scheduler.rs:1281-1305,1348-1413,248-269`、`proxy/database/channel.rs:851-890,1005-1022`、`proxy/web/mirakurun.rs:704-715,785-810,875-950`、`proxy/web/api/client_view.rs:35-115,244-290`。
 
 ## 4. 時間・失敗・再実行
 

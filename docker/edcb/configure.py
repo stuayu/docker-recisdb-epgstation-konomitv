@@ -6,7 +6,7 @@ import sys
 from http_public import update_mime
 stack_root = Path(os.environ.get("EDCB_STACK_ROOT", str(Path(__file__).resolve().parents[2])))
 sys.path.insert(0, str(stack_root / "scripts"))
-from editable import migrate_edcb, edcb_editable, backup
+from editable import migrate_edcb, edcb_editable, backup, migrate_edcb_access_defaults
 from storage import targets
 from importlib.util import module_from_spec, spec_from_file_location
 spec = spec_from_file_location("render", stack_root / "scripts/render-config.py")
@@ -80,6 +80,7 @@ for template in template_root.glob('*.example'):
         if 'EDCB_RECORDED' in os.environ and 'RECORDED_DIRS_JSON' not in os.environ:
             body = body.replace('/recorded/edcb', str(recorded))
         destination.write_text(body)
+migrate_edcb_access_defaults(config)
 lib = Path(os.environ.get('EDCB_LIB', '/usr/local/lib/edcb'))
 lib.mkdir(parents=True, exist_ok=True)
 ini = config / 'BonDriver_LinuxMirakc.so.ini'

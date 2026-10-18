@@ -3,6 +3,7 @@
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import grp
 import fcntl
 import hashlib
 import importlib.util
@@ -57,6 +58,65 @@ def devices(path):
         elif re.fullmatch(r'/dev/(px4video|pt[13]video|pxmlt\d*video|pxm1urvideo|pxs1urvideo|isdbt2071video|isdb2056video)\d+', node):
             result.append(node)
     return result
+
+
+def device_nodes(path):
+    """Return every container device node, including DVB demux and DVR nodes."""
+    nodes = set()
+    for line in path.read_text().splitlines():
+        match = re.fullmatch(r'\s*- "([^"\n]+):(/dev/[^"\n]+)"\s*', line)
+        if match:
+            nodes.add(match[2])
+    return sorted(nodes)
+
+
+def preflight(env, nodes):
+    inaccessible = []
+    for node in nodes:
+        result = subprocess.run(
+            [os.environ.get('DOCKER_BIN', 'docker'), 'compose', 'exec', '-T', 'recisdb-proxy',
+             'sh', '-c', 'test -r "$1" -a -w "$1"', 'sh', node],
+            cwd=ROOT, env={**os.environ, **env}, capture_output=True, text=True, timeout=30)
+        if result.returncode:
+            try:
+                st = Path(node).stat()
+                try:
+                    group = grp.getgrgid(st.st_gid).gr_name
+                except KeyError:
+                    group = str(st.st_gid)
+                owner = f'{st.st_uid}:{st.st_gid} ({group})'
+            except (OSError, KeyError):
+                owner = '所有者情報を取得できません'
+            inaccessible.append((node, owner))
+    if inaccessible:
+        say('デバイスをコンテナから読み書きできません。スキャンを中止')
+        for node, owner in inaccessible:
+            say(f'権限不足: {node} / ホスト所有者 group={owner}')
+        result = subprocess.run([os.environ.get('DOCKER_BIN', 'docker'), 'compose', 'exec', '-T',
+                                 'recisdb-proxy', 'id'], cwd=ROOT,
+                                env={**os.environ, **env}, capture_output=True, text=True, timeout=30)
+        say('recisdb-proxy の groups: ' + (result.stdout.strip() or '取得できません'))
+        raise SetupError('TUNER_GIDS と compose.tuners.yaml を更新し、make tuners を実行してください')
+
+
+def scan_log_lines(env, since):
+    try:
+        result = subprocess.run([os.environ.get('DOCKER_BIN', 'docker'), 'compose', 'logs', '--since', since,
+                                 'recisdb-proxy'], cwd=ROOT, env={**os.environ, **env},
+                                capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode:
+        return []
+    patterns = (re.compile(r'perform_scan:', re.I), re.compile(r'enumerate_spaces_and_channels', re.I))
+    severity = re.compile(r'\b(?:WARN|WARNING|ERROR)\b', re.I)
+    secret = re.compile(r'(?i)(bearer\s+)[^\s,;]+|((?:auth[_-]?token|token|password|secret)\s*[=:]\s*)[^\s,;]+')
+    lines = []
+    for line in result.stdout.splitlines():
+        if severity.search(line) and any(pattern.search(line) for pattern in patterns):
+            cleaned = secret.sub(lambda match: (match.group(1) or match.group(2)) + '[REDACTED]', line)
+            lines.append(cleaned[:500])
+    return lines[-5:]
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -186,33 +246,57 @@ class Progress:
             self.process.wait(timeout=10)
 
 
-def scan(api, rows, automatic, timeout, poll, progress):
+def scan(api, rows, automatic, timeout, poll, progress, env):
     latest = {row['id']: history(api, row) for row in rows}
     pending = [row for row in rows if not automatic or not scanned(latest[row['id']]) or row.get('is_scanning') or row.get('next_scan_at') == 0]
+    failures = []
+    successes = 0
     for index, row in enumerate(pending):
         if row['max_instances'] != 1:
             raise SetupError('物理デバイスの max_instances を 1 に直してから再実行してください: ' + row['dll_path'])
         previous = latest[row['id']]
         baseline = previous['id'] if previous else 0
-        if not row.get('is_scanning') and row.get('next_scan_at') != 0:
+        try:
+            initial = api.call(f'/api/bondriver/{row["id"]}')['bondriver']
+        except SetupError:
+            initial = row
+        last_scan_before = initial.get('last_scan')
+        started_at = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+        if not initial.get('is_scanning') and initial.get('next_scan_at') != 0:
             api.call(f'/api/bondriver/{row["id"]}/scan', {})
         started = time.monotonic()
-        while True:
-            status = api.call(f'/api/bondriver/{row["id"]}')['bondriver']
-            result = history(api, row)
-            elapsed = int(time.monotonic() - started)
-            progress.show(index, len(pending), f'{row["dll_path"]}: ' +
-                          ('スキャン中' if status.get('is_scanning') else '開始/終了待機') + f' ({elapsed} 秒)')
-            if result and result['id'] > baseline:
-                if not scanned(result):
-                    raise SetupError(f'{row["dll_path"]}: スキャン失敗または受信 0 局 (履歴 ID {result["id"]})。アンテナ・権限・DVB firmware を確認')
-                if not status.get('is_scanning') and status.get('next_scan_at') != 0:
-                    latest[row['id']] = result
-                    progress.show(index + 1, len(pending), f'{row["dll_path"]}: {result["channel_count"]} 局')
-                    break
-            if time.monotonic() - started >= timeout:
-                raise SetupError(f'{row["dll_path"]}: {timeout:g} 秒でタイムアウト。サーバーのスキャン予約は継続します。履歴・録画状態を確認してから再実行')
-            time.sleep(poll)
+        try:
+            while True:
+                status = api.call(f'/api/bondriver/{row["id"]}')['bondriver']
+                result = history(api, row)
+                elapsed = int(time.monotonic() - started)
+                progress.show(index, len(pending), f'{row["dll_path"]}: ' +
+                              ('スキャン中' if status.get('is_scanning') else '開始/終了待機') + f' ({elapsed} 秒)')
+                if result and result['id'] > baseline:
+                    if not scanned(result):
+                        raise SetupError(f'{row["dll_path"]}: スキャン失敗または受信 0 局 (履歴 ID {result["id"]})。アンテナ・権限・DVB firmware を確認')
+                    if not status.get('is_scanning') and status.get('next_scan_at') != 0:
+                        latest[row['id']] = result
+                        progress.show(index + 1, len(pending), f'{row["dll_path"]}: {result["channel_count"]} 局')
+                        successes += 1
+                        break
+                if (not status.get('is_scanning') and status.get('last_scan') is not None
+                        and (last_scan_before is None or status['last_scan'] > last_scan_before)
+                        and (not result or result['id'] <= baseline)):
+                    raise SetupError(f'{row["dll_path"]}: 失敗 (チャンネル列挙に失敗。デバイスの権限・ドライバーを確認)')
+                if time.monotonic() - started >= timeout:
+                    raise SetupError(f'{row["dll_path"]}: {timeout:g} 秒でタイムアウト。サーバーのスキャン予約は継続します。履歴・録画状態を確認してから再実行')
+                time.sleep(poll)
+        except SetupError as error:
+            failures.append(str(error))
+            say('スキャン失敗: ' + str(error))
+            for line in scan_log_lines(env, started_at):
+                say('recisdb-proxy: ' + line)
+            progress.show(index + 1, len(pending), f'{row["dll_path"]}: 失敗。次のチューナーへ')
+    if successes == 0 and failures:
+        raise SetupError('全チューナーのスキャンに失敗。原因候補: デバイス権限/GID、ドライバー、アンテナ。'
+                         '確認: ls -l /dev/px4video* /dev/dvb/adapter*/*; '
+                         'docker compose exec recisdb-proxy id。詳細: ' + ' / '.join(failures))
     return latest
 
 
@@ -360,16 +444,18 @@ def main():
                 return
         config = api.call('/api/scan-config')['config']
         timeout = args.timeout or max(1200, config['scan_timeout_secs'] + 2 * config['check_interval_secs'] + 120)
+        preflight(env, device_nodes(Path(os.environ.get('TUNERS_COMPOSE_FILE', str(ROOT / 'compose.tuners.yaml')))))
         progress = Progress(args.tui)
         try:
-            latest = scan(api, rows, args.automatic, timeout, args.poll, progress)
+            latest = scan(api, rows, args.automatic, timeout, args.poll, progress, env)
         finally:
             progress.close()
         services = api.call('/mirakurun/api/services')
         channels = api.call('/mirakurun/api/channels')
         if not services or not channels:
             raise SetupError('Mirakurun API に受信局がありません')
-        signature = {'drivers': [[row['id'], row['dll_path'], latest[row['id']]['id']] for row in rows],
+        signature = {'drivers': [[row['id'], row['dll_path'], latest[row['id']]['id']]
+                                 for row in rows if latest.get(row['id'])],
                      'services': hashlib.sha256(json.dumps(services, sort_keys=True).encode()).hexdigest(),
                      'edcb': 'compose.edcb.yaml' in env.get('COMPOSE_FILE', '').split(':')}
         state = ROOT / 'data/tuner-setup.json'

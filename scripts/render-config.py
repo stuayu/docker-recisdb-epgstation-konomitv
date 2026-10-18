@@ -17,7 +17,7 @@ import shutil
 import sys
 import json
 from storage import directories, targets, mounts
-from editable import migrate_edcb, migrate_amatsukaze
+from editable import migrate_edcb, migrate_amatsukaze, migrate_edcb_access_defaults
 from dashboard import generate as generate_dashboard
 
 SERVICES = {
@@ -66,6 +66,7 @@ def enabled(name, env):
 def migrate_editable(root, env):
     if enabled('edcb', env):
         migrate_edcb(root / 'data/edcb', root / 'config/edcb')
+        migrate_edcb_access_defaults(root / 'config/edcb')
     if enabled('amatsukaze', env):
         migrate_amatsukaze(root / 'data/amatsukaze', root / 'config/amatsukaze')
 

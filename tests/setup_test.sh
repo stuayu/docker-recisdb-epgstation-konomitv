@@ -30,6 +30,11 @@ cat > "$TMP/bin/getent" <<'EOF'
 #!/usr/bin/env bash
 [[ $1 == group && $2 == video ]] && echo 'video:x:44:'
 EOF
+cat > "$TMP/bin/stat" <<'EOF'
+#!/usr/bin/env bash
+[[ $3 == *renderD* ]] && exit 1
+echo 44
+EOF
 cat > "$TMP/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SYSTEMCTL_CALLS"
@@ -123,7 +128,12 @@ grep -q '^RECISDB_HTTPS_PORT=40443$' "$ENV_FILE" || fail 'HTTPS port setting pre
 HTTPS=yes run_setup none >"$TMP/out"
 grep -q ':compose.https.yaml$' "$ENV_FILE" || fail 'HTTPS re-enable COMPOSE_FILE'
 
-mkdir -p "$TMP/dev/dri"; touch "$TMP/dev/dri/renderD128"; run_setup intel >"$TMP/out"
+mkdir -p "$TMP/dev/dri"; touch "$TMP/dev/dri/renderD128"
+sed -i.bak '/^RENDER_GID=/d' "$ENV_FILE"
+printf 'VIDEO_GID=77\n' >> "$ENV_FILE"
+run_setup intel >"$TMP/out"
+grep -q '^RENDER_GID=77$' "$ENV_FILE" || fail 'legacy Intel VIDEO_GID migrated to RENDER_GID'
+if grep -q '^VIDEO_GID=' "$ENV_FILE"; then fail 'legacy VIDEO_GID removed'; fi
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.intel.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'Intel COMPOSE_FILE'
 rm "$TMP/dev/dri/renderD128"; if run_setup intel >"$TMP/intel-missing" 2>&1; then fail 'Intel GPU without render node should stop by default'; fi
 grep -q 'renderD\* がありません' "$TMP/intel-missing" || fail 'Intel render node guidance'

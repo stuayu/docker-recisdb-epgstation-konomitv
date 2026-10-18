@@ -1,5 +1,10 @@
 # Amatsukaze 有効時は compose.amatsukaze.intel.yaml も追加する。setup.sh が自動選択。
 services:
+  epgstation:
+    group_add:
+      - "${RENDER_GID:-110}"
   konomitv:
     devices:
       - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-110}"

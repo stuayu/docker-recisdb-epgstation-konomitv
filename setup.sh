@@ -300,11 +300,20 @@ put RECISDB_HTTPS_PORT "$p4"; put EPGSTATION_HTTPS_PORT "$p5"; put AKEBI_KEYLESS
 profiles=$(get COMPOSE_PROFILES '')
 profiles=$(printf '%s' "$profiles" | tr ',' '\n' | sed '/^mariadb$/d' | paste -sd, -)
 put COMPOSE_PROFILES "$profiles"
-video_gid=''
-if [[ $gpu == intel ]]; then video_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true); fi
-[[ -n $video_gid ]] || video_gid=$(getent group video 2>/dev/null | awk -F: '{print $3}' || true)
-if [[ -z $video_gid && $gpu == intel && -n ${render_node:-} ]]; then video_gid=$(stat -c '%g' "$render_node" 2>/dev/null || true); fi
-put VIDEO_GID "${video_gid:-44}"
+render_gid=$(get RENDER_GID '')
+if [[ $gpu == intel ]]; then
+  for render_node in "$DEV_DIR"/dri/renderD*; do
+    [[ -e $render_node ]] || continue
+    render_gid=$(stat -c '%g' "$render_node" 2>/dev/null || true)
+    [[ -n $render_gid ]] && break
+  done
+  if [[ -z $render_gid ]]; then render_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true); fi
+  # VIDEO_GID was the render group on older Intel setups.
+  if [[ -z $render_gid ]]; then render_gid=$(get VIDEO_GID ''); fi
+fi
+[[ $render_gid =~ ^[0-9]+$ ]] || render_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true)
+[[ $render_gid =~ ^[0-9]+$ ]] || render_gid=110
+put RENDER_GID "$render_gid"
 command -v openssl >/dev/null || fail 'openssl がありません。' 'sudo apt install -y openssl を実行してください。'
 mariadb_password=$(get MARIADB_PASSWORD ''); root_password=$(get MARIADB_ROOT_PASSWORD '')
 [[ -n $mariadb_password && $mariadb_password != change-me ]] || mariadb_password=$(openssl rand -hex 24)
@@ -327,7 +336,7 @@ if [[ ! -f $ENV_FILE ]]; then cp .env.example "$ENV_FILE"; fi
 if [[ -s $SETTINGS_FILE ]]; then
   if [[ -f $ENV_FILE ]]; then stamp=$(date +%Y%m%d%H%M%S%N); cp -p "$ENV_FILE" "$ENV_FILE.bak.$stamp"; chmod 600 "$ENV_FILE.bak.$stamp"; fi
   tmp=$(mktemp)
-  sed '/^SETUP_DB=/d; /^EDCB_RECORDING_PATHS=/d; /^BONCAS_SUBNET=/d' "$ENV_FILE" > "$tmp"
+  sed '/^SETUP_DB=/d; /^EDCB_RECORDING_PATHS=/d; /^BONCAS_SUBNET=/d; /^VIDEO_GID=/d' "$ENV_FILE" > "$tmp"
   python3 - "$tmp" "$SETTINGS_FILE" <<'PYENV'
 from pathlib import Path
 import sys

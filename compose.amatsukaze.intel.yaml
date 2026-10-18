@@ -3,3 +3,5 @@ services:
   amatsukaze:
     devices:
       - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-110}"

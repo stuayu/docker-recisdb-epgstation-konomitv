@@ -12,8 +12,6 @@ services:
     user: "${RUN_UID:-1000}:${RUN_GID:-1000}"
     environment:
       TZ: ${TZ}
-    group_add:
-      - "${VIDEO_GID:-44}"
     volumes:
       - ./data/recisdb:/data
       # Host-editable settings created by setup.sh. Read-write: recisdb-proxy rewrites it for preview setup.
