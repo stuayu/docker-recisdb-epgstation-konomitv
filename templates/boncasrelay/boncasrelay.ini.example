@@ -1,0 +1,11 @@
+[General]
+ListenAddress=0.0.0.0
+ServerPort=6900
+Allow=${BONCAS_SUBNET}
+Verbose=false
+[CardReader]
+BCAS=
+ACAS=
+[Web]
+Listen=0.0.0.0:6980
+Enabled=true

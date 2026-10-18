@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: docker/edcb/Dockerfile
       args:
+        EDCB_EPGSTATION_ENABLED: ${EDCB_EPGSTATION_ENABLED:-0}
+        EDCB_TO_EPGSTATION_REPO: ${EDCB_TO_EPGSTATION_REPO:-https://github.com/stuayu/EDCB-to-EPGStation.git}
+        EDCB_TO_EPGSTATION_REF: ${EDCB_TO_EPGSTATION_REF:-main}
         EDCB_REPO: ${EDCB_REPO:-https://github.com/stuayu/EDCB.git}
         EDCB_REF: ${EDCB_REF:-my-build}
         EDCB_WEBUI_REPO: ${EDCB_WEBUI_REPO:-https://github.com/EMWUI/EDCB_Material_WebUI.git}
@@ -16,12 +19,17 @@ services:
       TZ: ${TZ:-Asia/Tokyo}
       RUN_UID: ${RUN_UID:-1000}
       RUN_GID: ${RUN_GID:-1000}
+      EDCB_CONFIG_DIR: /config/edcb
+      EDCB_EPGSTATION_ENABLED: ${EDCB_EPGSTATION_ENABLED:-0}
+      EDCB_RECORDING_PATHS: ${EDCB_RECORDING_PATHS:-["/recorded/edcb"]}
       EDCB_TUNER_COUNT: ${EDCB_TUNER_COUNT:-2}
     depends_on:
       recisdb-proxy:
         condition: service_healthy
     volumes:
       - ./data/edcb:/var/local/edcb
+      - ./config/edcb:/config/edcb
+      - ./config/edcb-to-epgstation:/config/edcb-to-epgstation:ro
       - ./data/recisdb:/recisdb:ro
       - ${RECORDED_DIR}:/recorded
     ports:

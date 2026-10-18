@@ -291,7 +291,7 @@ cd docker-recisdb-epgstation-konomitv
 ./setup.sh
 ```
 
-質問には既定値が表示されます。BonCasRelay のホスト名/IP、録画先、GPU、EDCB、Amatsukaze の利用を選びます。通常の初回構成では Enter で進められます。チューナーが未検出でも続行でき、ドライバー導入後に `make tuners` を実行できます。ビルドと起動を含めず設定だけ行う場合は `./setup.sh --reconfigure` を使います。
+対話端末に whiptail または dialog があれば画面で選択できます。ない場合は Debian / Ubuntu で導入を確認し、拒否した場合は文字入力へ戻ります。質問には既定値が表示されます。BonCasRelay のホスト名/IP、録画先、GPU、EDCB、Amatsukaze の利用を選びます。通常の初回構成では Enter で進められます。チューナーが未検出でも続行でき、ドライバー導入後に `make tuners` を実行できます。ビルドと起動を含めず設定だけ行う場合は `./setup.sh --reconfigure` を使います。
 
 ### 2. ブラウザーで初期設定
 
@@ -335,6 +335,7 @@ EPGStation の DB は MariaDB 固定です。設定ファイルは `setup.sh` �
 | EDCB チャンネル再取得 | `make edcb-chset` (EDCB の録画がないとき) |
 | 再ビルド | `make build` |
 | ソース更新・再ビルド・再起動 | `make update` |
+| 録画先だけ変更 | `make storage` |
 | 設定・テスト | `make config` / `make test` |
 | 設定ファイルの再生成 | `make regen-config SERVICE=<名前>` |
 | バックアップ・復元 | `make backup` / `make restore FILE=...` |
@@ -367,6 +368,8 @@ BonCasLink 互換通信は平文・無認証です。BonCasRelay は信頼でき
 | `compose.yaml` | recisdb-proxy、EPGStation、KonomiTV、標準の MariaDB サービス |
 | `compose.tuners.yaml` | `make tuners` / setup が `/dev` から生成するチューナー公開設定 |
 | `compose.intel.yaml` / `compose.nvidia.yaml` | KonomiTV コンテナへの GPU デバイス設定 |
+| `compose.boncasrelay.yaml` | 任意の BonCasRelay と USB カードリーダー、限定サブネット |
+| `compose.storage.yaml` | 複数録画先の追加マウント。セットアップが生成します |
 | `compose.edcb.yaml` | 任意の EDCB と Material WebUI |
 | `compose.edcb.https.yaml` | EDCB と HTTPS の両方が有効な場合の Akebi 経路 |
 | `compose.amatsukaze.yaml` | 任意の Amatsukaze と EPGStation 連携設定 |
@@ -375,7 +378,7 @@ BonCasLink 互換通信は平文・無認証です。BonCasRelay は信頼でき
 | `.env.example` | 初期環境変数の例 |
 | `setup.sh` | 対話式初回セットアップ |
 | `scripts/gen-tuners.sh` | チューナーデバイスから Compose ファイル生成 |
-| `config/<サービス名>/` | setup.sh が初回生成する利用者編集用の設定 (recisdb-proxy / epgstation / konomitv)。`backup/` に再生成前の退避ファイル |
+| `config/<サービス名>/` | setup.sh が初回生成する利用者編集用の設定 (recisdb-proxy / epgstation / konomitv / edcb / amatsukaze / boncasrelay / edcb-to-epgstation)。`backup/` に再生成前の退避ファイル |
 | `templates/` | 設定ファイルの元になるテンプレート (`*.example`)。通常は編集しません |
 | `scripts/` | 設定生成 (`render-config.py`)、バックアップ・復元 (`backup.sh` / `restore.sh`) など |
 | `docker/` | 各コンテナの Dockerfile と起動処理 |
@@ -401,14 +404,16 @@ KonomiTV フォークは Akebi をコンテナ内 `0.0.0.0:server.port` で待�
 | recisdb-proxy | `config/recisdb-proxy/recisdb-proxy.toml` | `/data/recisdb-proxy.toml` | BonCasLink 接続先、Web 認証、DB パス。Web 画面の自動設定が preview 用のパスを書き換えることがあります | `docker compose restart recisdb-proxy` |
 | EPGStation | `config/epgstation/config.yml` | `/app/config/config.yml` | DB 接続、エンコード設定、Amatsukaze 連携。DB パスワードを含むため権限は 600 です | `docker compose restart epgstation` |
 | KonomiTV | `config/konomitv/config.yaml` | `/code/config.yaml` | KonomiTV サーバー設定。KonomiTV の設定画面からも保存されます | `docker compose restart konomitv` |
-| EDCB (任意) | `data/edcb/` の `EpgTimerSrv.ini`、`Common.ini`、`Setting/` | `/var/local/edcb/` | EDCB の設定・予約・WebUI の設定。予約データと同じ場所のため `data/` に置いています | `docker compose restart edcb` |
-| Amatsukaze (任意) | `data/amatsukaze/config/` など | `/app/config/` など | Amatsukaze の設定。初回起動時に既定値を配置し、以後は上書きしません | `docker compose restart amatsukaze` |
+| EDCB (任意) | `config/edcb/*.ini`、`config/edcb/Setting/` の INI・ChSet | `/config/edcb/` から `/var/local/edcb/` へリンク | 録画・チューナー・WebUI 設定。予約・EPG は `data/edcb/` に保存します | `docker compose restart edcb` |
+| Amatsukaze (任意) | `config/amatsukaze/{config,profile,avs,bat,drcs,JL,logo}/` | `/app/config/` など | Amatsukaze の設定。初回起動時に既定値を配置し、以後は上書きしません | `docker compose restart amatsukaze` |
+| BonCasRelay (任意) | `config/boncasrelay/boncasrelay.ini` | `/config/boncasrelay.ini` | 待受・許可サブネット・カードリーダー。WebUI の保存も反映します | `docker compose restart boncasrelay` |
+| EDCB-to-EPGStation (任意) | `config/edcb-to-epgstation/config.yml` | `/config/edcb-to-epgstation/config.yml` | API 接続先、登録方法、エンコード | 次の録画後実行から反映します |
 | MariaDB | なし (`.env` の `MARIADB_*`) | なし | 接続情報は `.env` で管理します。`.env` のパスワードを変えても既存の DB データは変わりません | 対象外 |
 
 `.env` の値 (BonCasRelay の接続先、Amatsukaze の有効/無効、DB パスワードなど) を後から変えたときは、該当サービスの設定ファイルを再生成します。
 
 ```bash
-make regen-config SERVICE=epgstation    # recisdb-proxy / epgstation / konomitv のいずれか
+make regen-config SERVICE=epgstation    # edcb / amatsukaze / boncasrelay / edcb-to-epgstation も指定できます
 ```
 
 再生成では、現在のファイルを `config/<サービス名>/backup/<ファイル名>.<日時>` に退避し、差分 (`diff -u` 形式) を表示してから置き換えます。確認は `y` で進みます。`--yes` 相当の非対話実行はできません (スクリプトでは `scripts/render-config.py regen --service <名前> --yes` を直接使います)。置き換えは同じファイルへの書き込みで行うため、コンテナのバインドマウントは保たれます。置き換え後は `docker compose restart <サービス名>` を実行してください。
@@ -486,7 +491,8 @@ encode:
 | ホスト | EPGStation | Amatsukaze | 用途 |
 | --- | --- | --- | --- |
 | `${RECORDED_DIR}` | `/recorded` | `/recorded` | 録画 TS と EPGStation が指定するエンコード出力先 |
-| `data/amatsukaze/{avs,bat,config,data,drcs,JL,logo,profile,input,output}` | 対象外 | `/app/` 以下の同名ディレクトリ | スクリプト、設定、キュー・ログ、外字、CM 解析、ロゴ、プロファイル、手動入出力 |
+| `config/amatsukaze/{avs,bat,config,drcs,JL,logo,profile}` | 対象外 | `/app/` 以下の同名ディレクトリ | スクリプト、設定、外字、CM 解析、ロゴ、プロファイル |
+| `data/amatsukaze/{data,input,output}` | 対象外 | `/app/` 以下の同名ディレクトリ | キュー・ログ・手動入出力 |
 
 初回起動時にイメージ内の既定ファイルを空の永続化先へコピーします。以降は存在するファイルを上書きしません。`/app/input` / `/app/output` は Amatsukaze 単独で使う場合の場所で、EPGStation 連携では両コンテナの `/recorded` を使います。上流 entrypoint の `/app` 所有者変更が録画全体へ及ばないよう、録画先は `/app/input` に重ねてマウントしていません。
 
@@ -514,7 +520,7 @@ WebUI は `AMATSUKAZE_WEBUI_PORT` (既定 32769) で公開します。今回の 
 | 症状 | 確認と対処 |
 | --- | --- |
 | キュー投入失敗 / 接続拒否 | `docker compose logs amatsukaze epgstation` と EPGStation エンコード詳細を確認。内部接続は `amatsukaze:32768`。初回サーバー起動完了を待つ |
-| プロファイルがない | WebUI で `EPGStation` の存在を確認。`data/amatsukaze/profile/EPGStation.profile` の権限・XML と起動ログを確認。編集済みファイルは再起動で上書きされない |
+| プロファイルがない | WebUI で `EPGStation` の存在を確認。`config/amatsukaze/profile/EPGStation.profile` の権限・XML と起動ログを確認。編集済みファイルは再起動で上書きされない |
 | パスが見つからない | 両コンテナの `/recorded` に同じファイルがあるか確認。出力先も `/recorded` 以下にする。ホスト側パスや `/app/output` を EPGStation の出力先に指定しない |
 | ロゴ待ち / CM カットされない | WebUI のサービス設定でロゴを割り当て、CM 解析無効を解除。`JL_標準.txt` と放送局固有設定を確認 |
 | 保存に失敗 / permission denied | `.env` の `RUN_UID` / `RUN_GID` と録画・出力ディレクトリの権限を確認。既存 TS の所有権は自動変更しない |
@@ -568,7 +574,7 @@ recisdb-proxy-rs 側に必要な改修は、Linux 向け `CreateBonStruct` / `ST
 | `EpgDataCap_Bon.ini [SET]` | `Scramble=0`、`EMM=0` |
 | `BonDriver_LinuxMirakc.so.ini [GLOBAL]` | `SERVER_HOST=recisdb-proxy`、`SERVER_PORT=40080`、`SERVER_TYPE=http`、`DECODE_B25=0`、`PRIORITY=2`、`SERVICE_SPLIT=1` |
 
-設定・予約・EPG・WebUI は `data/edcb` に永続化します。初回は欠けたファイルだけを配置し、以後 INI や ChSet を上書きしません。録画は共有 `RECORDED_DIR` の `edcb/` サブディレクトリに分け、EPGStation とファイル名が衝突しないようにします。EDCB は選択した UID/GID に権限を落として起動します。既存録画全体の所有者は変更しません。初回生成後に `.env` のチューナー数を変えても既存 INI は維持されます。再生成が必要な場合は EDCB を停止して対象 INI をバックアップ先へ退避し、再起動してください。予約ファイルのある `Setting` は維持してください。
+編集する INI と ChSet は `config/edcb/` に置き、EDCB の既定パスからリンクします。EDCB の INI 保存は同じファイルを書き換えるため、リンク先が更新されます (`Common/PathUtil.cpp` の `WritePrivateProfileString`)。予約・録画履歴・自動予約・EPG・ログ・WebUI コードは `data/edcb/` に残します。旧設定は setup.sh がコピーし、起動時に旧パスを `.pre-config-migration` として残してからリンクします。録画は各録画先の `edcb/` に保存します。UID/GID を合わせて起動し、既存録画全体の所有者は変更しません。チューナー数や保存先を変更した場合は、録画がないときに EDCB を停止し、`make regen-config SERVICE=edcb` の差分を確認してから `make up` を実行してください。既存プリセット・予約に保存された個別設定は E3 でも確認してください。
 
 recisdb-proxy がサーバー側で復号し、互換 API の `decode` クエリ値は解釈されません。EDCB 側に B25 ライブラリーは導入せず、上記のアプリ設定と既定予約モードで CAS 処理を無効にします。WebUI で別の録画プリセットを追加する場合も「B25 処理なし」を選びます。根拠: recisdb [mirakurun.rs:1093-1108](https://github.com/stuayu/recisdb-proxy-rs/blob/feature/proxy/recisdb-proxy/src/web/mirakurun.rs#L1093-L1108)、EDCB [CommonDef.h:22-25](https://github.com/stuayu/EDCB/blob/my-build/Common/CommonDef.h#L22-L25)、[TunerBankCtrl.cpp:793-802](https://github.com/stuayu/EDCB/blob/my-build/EpgTimerSrv/EpgTimerSrv/TunerBankCtrl.cpp#L793-L802)、[AppSetting.cpp:37-40](https://github.com/stuayu/EDCB/blob/my-build/EpgDataCap_Bon/EpgDataCap_Bon/AppSetting.cpp#L37-L40)。
 
@@ -578,7 +584,7 @@ recisdb-proxy がサーバー側で復号し、互換 API の `decode` クエリ
 
 1. 起動時に recisdb-proxy の永続 DB を読み取り専用で開き、`web_auth_config.auth_token` を取得します。利用者による token の転記は不要です。
 2. 認証付き `/api/client-view/targets` で登録済みドライバーを列挙し、`/api/client-view/files/chset4?tuner=...` と `chset5?tuner=...` を取得します。
-3. `/mirakurun/api/services` の順番に合わせて空間・チャンネル番号を変換し、サービスを統合します。`BonDriver_LinuxMirakc(LinuxMirakc).ChSet4.txt` と `ChSet5.txt` を `data/edcb/Setting` に UTF-8 BOM で保存します。BNDP 用の ChSet4 をそのまま置くことはできません。
+3. `/mirakurun/api/services` の順番に合わせて空間・チャンネル番号を変換し、サービスを統合します。`BonDriver_LinuxMirakc(LinuxMirakc).ChSet4.txt` と `ChSet5.txt` を `config/edcb/Setting` に UTF-8 BOM で保存します。BNDP 用の ChSet4 をそのまま置くことはできません。
 4. 未スキャン・認証失敗・不正応答なら既存ファイルを保持し、ログへ理由を出します。初回は ChSet なしでも WebUI を起動します。recisdb-proxy でスキャンを完了してから `make edcb-chset` を実行してください。
 
 `make edcb-chset` は EDCB を停止し、一時コンテナで再取得・番号変換・既存ファイルの日時付きバックアップを行い、EDCB を再起動します。録画中は実行しないでください。取得失敗時も既存 ChSet を残して EDCB を再起動します。チャンネル追加・削除やスキャン後にも必要です。仮想番号が変わるため、再取得後は既存予約のチャンネルを確認してください。初回の EPG は次の定期取得、または WebUI の EPG 取得操作で読み込みます。recisdb の EPG DB を EDCB に直接コピーする処理ではありません。
@@ -603,3 +609,109 @@ Mac 上で shellcheck、bash 構文検査、`make test`、Compose YAML 読み込
 生成した EPGStation config.yml はローカルフォークの実物の `IConfigFile.ts` に対して TypeScript の `Partial<IConfigFile>` で型照合し、`ConfigSchema.ts` の DB キーも確認しました。EDCB、Lua 5.2、両候補の BonDriver は x86_64 Linux ELF にクロスビルドしました。クロス環境では CC/CXX/LD/OBJCOPY を Linux 向けに指定し、古い sysroot 用に `-ldl -lrt` を明示しました。Dockerfile は bookworm の glibc と Debian 配布 Lua を使うため、このクロス環境向け補助指定は不要です。
 
 この Mac には Docker daemon がないため、bookworm イメージ全体のビルド・起動、MariaDB 実接続、EDCB WebUI の実応答、EPG 取得、実録画・復号・KonomiTV との同時利用、Akebi 経路は未検証です。Linux 録画ホストでこれらを確認してください。
+
+
+## 画面で選ぶセットアップと再設定
+
+`./setup.sh` は次の順に進みます。チェックリストは Space で選択し、キャンセルすると設定前に中止できます。
+
+1. ようこそ画面で処理内容と所要時間を確認します。
+2. Docker / Compose、チューナー、px4_drv、GPU、カードリーダー、ファイアウォールの検出結果を確認します。不足しているソフトには導入を提案します。
+3. EDCB・Amatsukaze・HTTPS の入口を選択します。初回はすべて有効です。
+4. 録画先を複数選び、既定の保存先を選びます。
+5. このマシンで BonCasRelay を動かすか、別マシンに接続するかを選びます。
+6. 自動検出結果を初期値として GPU を確認します。
+7. 必要な場合だけ詳細ポート設定を開き、EDCB 自動登録・エンコードと UID/GID を確認します。
+8. 全設定の確認画面でセットアップを承認します。
+9. ビルド・起動中は進捗画面を表示します。ログは `data/setup-logs/<日時>-build.log` / `-start.log` に保存し、失敗時にも場所を表示します。
+10. 完了画面で各 URL とチャンネルスキャン・録画確認の案内を確認します。EDCB は `http://<IP>:5510/E3/` です。
+
+`./setup.sh --reconfigure` で現在の設定を初期値にして再選択できます。端末でない場合、`--yes`、画面ツールの導入を拒否した場合は従来の文字入力または既定値を使います。`--yes` は sudo 操作を承認しません。導入を含めて確認を省略する場合だけ `--auto-install` を明示します。このフラグは chown やサービス停止の確認も省略するため、表示される導入手順を事前に確認してください。
+
+### 録画先をあとから変更する
+
+`make storage` は録画先だけを選び直します。Docker の導入・ビルド・起動は行いません。`findmnt --json`、取得できなければ `lsblk --json`、さらに `df -PTk` からマウント済みファイルシステムを列挙します。空き容量・種別を表示し、NFS/CIFS も候補に含めます。`/`、`/boot`、`/snap`、tmpfs、overlay、Docker のデータ領域などは候補から外します。現在の保存先は候補に残します。
+
+「その他のフォルダーを選ぶ…」では dialog のディレクトリ選択、whiptail では入力欄を使います。存在しないフォルダーは確認後に作成し、所有者・書き込み可否・空き容量を確認します。100 GB 未満では警告します。権限不足の場合は対象フォルダーだけの `sudo chown UID:GID <パス>` を表示して確認します。既存録画全体への再帰 chown はしません。
+
+先頭は `.env` の `RECORDED_DIR`、全リストは `RECORDED_DIRS_JSON` に保存します。コンテナ内では `/recorded`、`/recorded2`、… とし、EPGStation の `recorded:`、KonomiTV の `video.recorded_folders`、EDCB の `RecFolderNum` / `RecFolderPathN` に反映します。EDCB はそれぞれの `edcb/` サブフォルダーを使います。Amatsukaze にも同じ `/recordedN` を渡すため、AddTask の入力・出力パスを共有できます。KonomiTV はホストパスとして `/recordedN` を設定し、実マウントは `/host-rootfs/recordedN` です。
+
+既存の設定ファイルは初回生成の方針を守り、自動では書き換えません。選択変更後は次の差分を確認してください。安全な部分更新は任意の手編集と区別しにくいため、バックアップ付き再生成を採用しています。
+
+```sh
+make regen-config SERVICE=epgstation
+make regen-config SERVICE=konomitv
+make regen-config SERVICE=edcb       # EDCB 有効時、録画のない時間に停止して実行します
+make up                            # マウント変更にはコンテナの再作成が必要です
+```
+
+保存先の削除・順序変更は既存 DB の録画パスにも影響します。古いマウントを外す前に、既存ファイルと DB の移行を確認してください。再生成はファイルの移動や DB の書き換えを行いません。非対話で複数選択する場合は、`RECORDED_DIRS_JSON='["/mnt/tv", "/mnt/tv2"]' ./setup.sh --yes` と指定できます。
+
+### 不足ソフトの判定と導入の根拠
+
+導入は Debian / Ubuntu のみ対応し、ほかのディストリビューションでは手順を表示します。導入済みは表示して飛ばします。実行する sudo コマンドと、導入用の `scripts/install-host.sh` 全体を表示して確認します。既存サービスへの影響がある NVIDIA runtime 設定後の Docker 再起動も確認対象です。
+
+| 対象 | 判定・方法 | 根拠 |
+| --- | --- | --- |
+| Docker / Compose | `docker` と `docker compose version`。不足時は公式署名鍵・apt リポジトリを登録し `docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` を導入します。グループ権限不足時は追加を提案し、再ログインを案内します | [Ubuntu 公式手順](https://docs.docker.com/engine/install/ubuntu/)・[Debian 公式手順](https://docs.docker.com/engine/install/debian/) |
+| px4_drv | `lsusb` の VID `0511` と対応 PID、デバイスノード、`modinfo px4_drv` を確認します。未導入時は README 記載の `v0.6.1` DKMS Debian パッケージと kernel headers を導入し、modprobe・udev 設定を実行します。ファームウェアはパッケージが導入します | [px4_drv README](https://github.com/stuayu/px4_drv#インストール-linux)・[USB ID 定義](https://github.com/stuayu/px4_drv/blob/master/driver/px4_usb.h)・`driver/px4_usb.c` の対応表 |
+| NVIDIA | `lspci` に NVIDIA があり `nvidia-ctk` がなければ、公式 apt リポジトリから Toolkit を提案します。GPU ドライバー自体は管理者が事前に導入します | [NVIDIA 公式手順](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) |
+| Intel / AMD | `/dev/dri/renderD*` と render/video グループを確認します | 既存 GPU 構成と同じです |
+| ファイアウォール | 読み取り可能な `ufw status` が有効なら、公開ポートの迂回を警告します。`ufw status` を読めない場合は `/etc/ufw/ufw.conf` の `ENABLED=yes` も確認し、実行時状態の確認を案内します。両方不明なら状態不明と表示します。設定は README のルーター ACL / DOCKER-USER 例に従います | [Docker のファイアウォール説明](https://docs.docker.com/engine/network/packet-filtering-firewalls/) |
+
+USB PID は `083f,084a,023f,024a,073f,074a,084e,024e,0252,0253,004b,084b,0254,924e,0854,0855,0052` を照合します。カードリーダーは USB CCID インターフェースクラス `0x0b` (`lsusb -v` の decimal 11)、または制限時間付き `pcsc_scan -r` のリーダー列挙で検出します。USB 情報を読めない場合も手動で同梱を選べます。`--install-docker` は従来互換の別名として受け付け、共通の導入提案へ統合しています。
+
+## BonCasRelay を同じマシンで動かす
+
+local を選ぶと `compose.boncasrelay.yaml` を追加し、公開ソースから `cargo build --locked --release --no-default-features -p boncasrelay` でビルドします。`BONCASRELAY_REPO` / `BONCASRELAY_REF` で取得元を指定できます。PC/SC はコンテナ内の `pcscd`・`libpcsclite1`・`libccid` を使います。[BonCasRelay README と INI 例](https://github.com/stuayu/BonCasRelay#設定)に従い、`[General] ServerPort=6900` / `Allow`、`[Web] Listen` / `Enabled` を生成します。
+
+カード通信はホストへ公開せず、recisdb-proxy の B25/4K 接続先はどちらも `boncasrelay:6900` です。WebUI はコンテナ内 `0.0.0.0:6980`、ホストでは `127.0.0.1:6980:6980` のみ公開します。UFW の 6900 許可ルールは同梱構成では不要です。別マシンの Relay を使う場合は、カードホスト側で録画ホスト IP からの 6900 を許可します。
+
+`Allow` と Compose default network の IPAM を `BONCAS_SUBNET` (既定 `172.30.69.0/24`) で一致させます。LAN/VPN や既存 Docker ネットワークと重複しない値にしてください。変更後は `make regen-config SERVICE=boncasrelay` と `make up` が必要です。recisdb-proxy の既存 TOML を local に切り替える場合は `make regen-config SERVICE=recisdb-proxy` も必要です。
+
+USB は `/dev/bus/usb` 全体をバインドし、`device_cgroup_rules: ['c 189:* rw']` で USB device major 189 の全 minor に読み書きを許可します。固定の `devices:` では再接続後のノード番号変更に対応できないため、この方式を採用しています。`privileged`・ホストの PC/SC socket・ホストネットワークは使いません。ただしコンテナから全 USB デバイスにアクセスできる点は把握してください。根拠は [Linux device 番号表](https://docs.kernel.org/admin-guide/devices.html)と [Compose device_cgroup_rules](https://docs.docker.com/reference/compose-file/services/#device_cgroup_rules) です。
+
+さらに USB ノード一覧・inode を 2 秒ごとに確認し、変化があればコンテナを終了して `restart: unless-stopped` で pcscd と Relay を起動し直します。[pcsc-lite の udev 実装](https://github.com/LudovicRousseau/PCSC/blob/1.9.9/src/hotplug_libudev.c)はイベントを監視しますが、コンテナ内へのホストイベント通知を前提にせず、再起動時の列挙で回復させます。ほかの USB デバイスの接続変更でも Relay が再起動し、通信は一時的に途切れます。USB 抜き差し後の実際の再接続・復号は Linux 実機で確認してください。
+
+ホストの `pcscd.service` または `pcscd.socket` が有効な場合は、両方の停止・無効化を表示して確認します。別アプリでもカードリーダーを使っている場合は、影響を確認してから選択してください。設定は `config/boncasrelay/boncasrelay.ini`、ログは `docker compose logs boncasrelay` です。
+
+## EDCB の録画を EPGStation に自動登録する
+
+EDCB 有効時に自動登録を質問します。既定は有効、登録後の Amatsukaze エンコードは既定で無効です。非対話では `EDCB_EPGSTATION=yes|no`、`EDCB_ENCODE=yes|no` で選べます。無効時は録画後フックを生成せず、Rust ツールもビルドしません。切り替え後は EDCB の再ビルドと、必要な設定の差分確認を行ってください。
+
+[EDCB-to-EPGStation](https://github.com/stuayu/EDCB-to-EPGStation) の Rust 版を採用しています。`src/lib.rs` は標準の `PathBuf`・環境変数・sysinfo・reqwest を使い、Windows 専用 API を要求しません。ソースを別の一時ディレクトリにコピーし、Linux x86_64 向け release ビルドで ELF の生成を確認しました。Dockerfile は Linux ネイティブでビルドします。取得元は `EDCB_TO_EPGSTATION_REPO` / `EDCB_TO_EPGSTATION_REF` で指定できます。Python 版へのフォールバックは不要でした。
+
+EDCB の [Unix バッチ仕様](https://github.com/stuayu/EDCB/blob/my-build/Document/Readme_Mod.txt)は実行権限付き `.sh` と環境変数渡しに対応します。ただし日時は ISO8601 の `StartTime` / `DurationSecond`、ファイル名は `FilePath` / `FileName` / `Title` です。`post-record.sh` と `post-record.py` で Rust 版が要求する `FILEPATH` / `FILENAME` / `TITLE` と分割日時へ変換し、日付をまたぐ録画も JST で扱います。上流ソースは変更しません。
+
+初回に `config/edcb/EpgTimerSrv.ini` の `[REC_DEF] BatFilePath=/opt/edcb-stack/post-record.sh` を設定します。既存 INI は維持するため、既存環境では `make regen-config SERVICE=edcb` で差分確認するか E3 の既定プリセットを編集してください。すでに個別の録画後実行を持つプリセット・予約は自動では変更しません。自動登録を無効に戻す場合も、既存の録画後実行設定を外したことを確認してください。
+
+接続先は `http://epgstation:8888/`、既定は `uploadMode: path`、元ファイル削除・プロセス待機・CPU 待機は無効です。EPGStation の `recorded:` と、localFilePath の許可リスト `importDirs:` に `edcb` → `/recorded/edcb`、追加保存先には `edcb2` → `/recorded2/edcb` などを生成します。追加保存先からの録画後実行では既定の登録先 `edcb` を対応する `edcbN` に置き換えた実行用設定を `data/edcb/upload/recordedN/` に作ります。利用者が指定した別の登録先は維持します。エンコード有効時は `mode: Amatsukaze` / `isSaveSameDirectory: true` / `removeOriginal: false` です。
+
+**`path` はファイルを転送しませんが、現在の EPGStation API は元ファイルを録画管理フォルダーへ移動します。** 許可リストの根拠は `src/model/api/recorded/RecordedApiModel.ts` と `src/model/recorded/import/ImportPathValidator.ts`、移動の根拠は `src/model/operator/recorded/RecordedManageModel.ts` の `addUploadedVideoFile()` です。同じフォルダーでも衝突回避で名前が変わる場合があります。EDCB 側の録画履歴の元パスは追随しません。視聴・削除は登録後の EPGStation 側で管理してください。移動せず登録する別の external import API とは動作が異なります。
+
+ツールは実行ファイルの隣の config/log を使うため、実行ファイルを `data/edcb/upload/` に配置し、config.yml はホスト設定へのリンクにしています。ログは `data/edcb/upload/edcb_to_epgstation.log` と `docker compose logs edcb` です。追加保存先は `data/edcb/upload/recordedN/edcb_to_epgstation.log` に出力します。ツール内で 5 MiB 超のログを 3 世代ローテーションします。
+
+### 未登録録画の手動登録 (backfill)
+
+UTF-8 JSON Lines の manifest を `data/edcb/backfill.jsonl` に用意します。時刻は Unix epoch のミリ秒、ONID/SID は十進文字列です。最初に dry-run を確認してください。
+
+```json
+{"filepath":"/recorded/edcb/example.ts","filename":"example","title":"番組名","onid":"4","sid":"101","startAt":1790000000000,"endAt":1790001800000,"recordedId":null}
+```
+
+```sh
+docker compose exec --user 1000:1000 edcb /opt/edcb-stack/post-record.sh backfill /var/local/edcb/backfill.jsonl
+docker compose exec --user 1000:1000 edcb /opt/edcb-stack/post-record.sh backfill /var/local/edcb/backfill.jsonl --apply --interval-sec 5 --limit 10
+```
+
+`1000:1000` は `.env` の RUN_UID/RUN_GID に合わせてください。状態は manifest 隣の `.state.jsonl` に記録します。backfill は常に path 登録で、エンコード・元ファイル削除は行いません。追加保存先は manifest を保存先ごとに分け、対応する `data/edcb/upload/recordedN/` の設定とバイナリーを確認してからそのバイナリーを直接実行してください。
+
+登録されない場合は、録画後実行の指定、実行権限、EDCB の環境変数、`http://epgstation:8888/` への接続、EPGStation の `recorded:` の名前、両コンテナでのパスと UID/GID を確認します。既存 INI にフックがない場合や既存 EPGStation 設定に `edcb` がない場合は再生成が必要です。リトライ全失敗時は非 0 で終了し、録画ファイルをツールから削除しません。API がすでに移動したファイルや作成済み recorded エントリがないか確認し、手動再実行による二重登録を避けてください。
+
+### 編集用設定の移行・再生成・バックアップ
+
+EDCB は `data/edcb/*.ini` と `Setting` の INI/ChSet、Amatsukaze は `data/amatsukaze/{avs,bat,config,drcs,JL,logo,profile}` の不足ファイルを `config/` へコピーします。旧ファイルを消さず、新しい側があれば上書きしません。Amatsukaze のリリース既定値は初回コンテナ起動時に不足分だけ配置します。予約・履歴・EPG・ログ・キュー・キャッシュ・手動入出力は `data/` のままです。
+
+Amatsukaze のエンコードがないことを確認して停止してから、`make regen-config SERVICE=amatsukaze` を実行してください。この処理は現在ビルドされたイメージの `/opt/amatsukaze-defaults` を起動処理なしで取得し、変更対象・テキスト差分を表示します。承認後に既存設定を `config/amatsukaze/backup/<日時>/` に退避して、イメージの既定値へ戻します。リリースに同梱されない `AmatsukazeServer.xml` / `UIState.xml` / `AutoSelectProfile.xml` は退避後に削除し、次回起動時に本体が既定値を生成します。根拠は Amatsukaze の `Server/EncodeServer.cs` の LoadAppData / LoadUIState / LoadAutoSelectData です。独自ファイルは維持します。ロゴなど同名のバイナリーも対象になり得るため、表示対象を確認してください。EDCB の再生成は INI のみで、予約や取得済み ChSet を消しません。
+
+`make backup` / `make restore` は新しい `config/` 全体と生成済み `compose.storage.yaml` も対象にします。複数保存先すべてと MariaDB の生ファイルは除外し、DB は SQL dump にします。実行中の予約・キューを含む完全な整合性が必要な場合は、録画のない時間帯に該当サービスを停止してから実行してください。

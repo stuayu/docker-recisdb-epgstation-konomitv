@@ -20,7 +20,7 @@ mkdir -p "$(dirname "$output")"
     count=$((count + 1))
   }
 
-  for name_pattern in px4video\* pt3video\* pxmlt5video\* isdb2056video\*; do
+  for name_pattern in px4video\* pt3video\* pxmlt\*video\* pxm1urvideo\* pxs1urvideo\* isdbt2071video\* isdb2056video\*; do
     for device_path in "$dev_dir"/$name_pattern; do
       [ -e "$device_path" ] || continue
       [ -d "$device_path" ] && continue

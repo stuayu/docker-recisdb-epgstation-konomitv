@@ -22,7 +22,7 @@ case "$*" in
   'compose version'|'info'|'compose config') exit 0;;
   'info --format {{json .Runtimes}}') [[ ${NVIDIA_TOOLKIT_OK:-0} == 1 ]] && echo '{"nvidia":{}}';;
   'compose ps --format json') echo '[]';;
-  'compose ps --status running --services') printf 'recisdb-proxy\nepgstation\nkonomitv\namatsukaze\nedcb\n';;
+  'compose ps --status running --services') printf 'recisdb-proxy\nepgstation\nkonomitv\namatsukaze\nedcb\nboncasrelay\n';;
   'compose logs --no-color recisdb-proxy') echo 'Web API auth token: test-token';;
 esac
 EOF
@@ -250,3 +250,5 @@ wait "$GATEWAY_PID" 2>/dev/null || true
 if AKEBI_BIN="$TMP/akebi-stub" AKEBI_ROUTES='bad-route' "$ROOT/docker/https-gateway/entrypoint.sh" >"$TMP/bad-route" 2>&1; then fail 'invalid Akebi route should fail'; fi
 grep -q 'expected PORT=URL' "$TMP/bad-route" || fail 'invalid route explanation'
 echo 'PASS: --yes generation, backup, GPU compose selection, relay failure, OS guard, build/up stubs'
+
+python3 "$ROOT/tests/setup_ui_test.py"

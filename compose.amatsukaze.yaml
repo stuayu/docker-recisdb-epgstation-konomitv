@@ -31,13 +31,13 @@ services:
       - "32768"
     volumes:
       - ${RECORDED_DIR}:/recorded
-      - ./data/amatsukaze/avs:/app/avs
-      - ./data/amatsukaze/bat:/app/bat
-      - ./data/amatsukaze/config:/app/config
+      - ./config/amatsukaze/avs:/app/avs
+      - ./config/amatsukaze/bat:/app/bat
+      - ./config/amatsukaze/config:/app/config
       - ./data/amatsukaze/data:/app/data
-      - ./data/amatsukaze/drcs:/app/drcs
-      - ./data/amatsukaze/JL:/app/JL
-      - ./data/amatsukaze/logo:/app/logo
-      - ./data/amatsukaze/profile:/app/profile
+      - ./config/amatsukaze/drcs:/app/drcs
+      - ./config/amatsukaze/JL:/app/JL
+      - ./config/amatsukaze/logo:/app/logo
+      - ./config/amatsukaze/profile:/app/profile
       - ./data/amatsukaze/input:/app/input
       - ./data/amatsukaze/output:/app/output

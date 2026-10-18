@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT"
-NONINTERACTIVE=0 YES=0 RECONFIGURE=0 NO_BUILD=0 NO_START=0 INSTALL_DOCKER=0
+NONINTERACTIVE=0 YES=0 RECONFIGURE=0 NO_BUILD=0 NO_START=0 AUTO_INSTALL=0 STORAGE_ONLY=0
 DEV_DIR=${DEV_DIR:-/dev}
 ENV_FILE=${ENV_FILE:-$ROOT/.env}
 COMPOSE_TUNERS=${TUNERS_COMPOSE_FILE:-$ROOT/compose.tuners.yaml}
@@ -17,7 +17,9 @@ usage() {
   --no-build         Docker イメージをビルドしない
   --no-start         コンテナを起動しない
   --reconfigure      質問と設定だけやり直す (ビルド・起動しない)
-  --install-docker   Docker 公式インストールスクリプトを確認後に実行
+  --install-docker   Docker 公式 apt リポジトリから確認後に導入
+  --auto-install     不足ソフトの導入・sudo 操作の確認を省略
+  --storage-only     録画先だけ変更 (make storage)
   --help             このヘルプ
 
 非対話環境変数: BONCAS_HOST, BONCAS_PORT, BONCAS_4K_SAME,
@@ -32,7 +34,8 @@ while (($#)); do
   case $1 in
     --yes) YES=1;; --no-build) NO_BUILD=1;; --no-start) NO_START=1;;
     --reconfigure) RECONFIGURE=1; NO_BUILD=1; NO_START=1;;
-    --install-docker) INSTALL_DOCKER=1;; --help|-h) usage; exit 0;;
+    --auto-install) AUTO_INSTALL=1;; --storage-only) STORAGE_ONLY=1; NO_BUILD=1; NO_START=1;;
+    --install-docker) :;; --help|-h) usage; exit 0;;
     *) printf '不明なオプション: %s\n' "$1" >&2; usage >&2; exit 2;;
   esac
   shift
@@ -42,7 +45,7 @@ if [[ -t 1 ]]; then GREEN=$'\033[32m'; RED=$'\033[31m'; RESET=$'\033[0m'; else G
 ok(){ printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
 fail(){ printf '%sエラー:%s %s\n対処: %s\n' "$RED" "$RESET" "$1" "$2" >&2; exit 1; }
 step(){ STEP=$((STEP+1)); printf '\n[%d/11] %s\n' "$STEP" "$*"; }
-ask(){ local prompt=$1 default=$2 value; if ((YES || NONINTERACTIVE)); then printf -v REPLY '%s' "$default"; else read -r -p "$prompt [$default]: " value; REPLY=${value:-$default}; fi; }
+ask(){ local prompt=$1 default=$2 value; if ((YES || NONINTERACTIVE)); then printf -v REPLY '%s' "$default"; elif [[ -n ${TUI:-} ]]; then ui_ask "$prompt" "$default"; return; else read -r -p "$prompt [$default]: " value; REPLY=${value:-$default}; fi; }
 get(){ local key=$1 default=$2 value; value=$(sed -n "s/^${key}=//p" "$ENV_FILE" 2>/dev/null | tail -n1 || true); printf '%s' "${value:-$default}"; }
 SETTINGS_FILE=$(mktemp)
 trap 'rm -f "$SETTINGS_FILE"' EXIT
@@ -50,24 +53,32 @@ put(){ printf '%s=%s\n' "$1" "$2" >> "$SETTINGS_FILE"; }
 case ${OS_OVERRIDE:-$(uname -s)} in Linux) ;; *) fail 'Linux 専用です (Docker Compose のデバイス設定を使います)。' '対応 Linux ホストで実行してください。テスト時は SETUP_OS=Linux を指定できます。';; esac
 (( EUID != 0 )) || fail 'root では実行できません。' '通常ユーザーで実行してください。sudo は必要な作業だけ個別に使います。'
 
+# shellcheck source=scripts/setup-ui.sh
+source "$ROOT/scripts/setup-ui.sh"
+# shellcheck source=scripts/setup-host.sh
+source "$ROOT/scripts/setup-host.sh"
+init_ui
+if ((STORAGE_ONLY)); then
+  [[ -f $ENV_FILE ]] || fail '.env がありません。' '先に通常セットアップを実行してください。'
+  select_storage
+  confirm "録画先: $storage_json に変更しますか？既存の設定は維持し、再生成を案内します。" yes || exit 1
+  python3 "$ROOT/scripts/update-storage.py" "$ROOT" "$ENV_FILE" "$recorded" "$storage_json"
+  exit 0
+fi
+host_inventory
 step 'OS・必要コマンド・容量を確認'
 command -v python3 >/dev/null || fail 'python3 がありません。' 'sudo apt install -y python3 を実行してください。'
 command -v git >/dev/null || fail 'git がありません。' 'Ubuntu/Debian: sudo apt update && sudo apt install -y git'
 docker_cmd=${DOCKER_BIN:-$(command -v docker || true)}
-if [[ -z $docker_cmd ]] && ((INSTALL_DOCKER)); then
-  printf 'これから get.docker.com を取得・実行し、Docker Engine をインストールします。\n'
-  if ((YES)); then fail '--install-docker と --yes の併用では確認を省略できません。' '対話端末で --install-docker を実行してください。'; fi
-  read -r -p '公式インストールスクリプトの実行を承認しますか? [y/N] ' answer
-  [[ $answer == y || $answer == Y ]] || fail 'Docker の導入を中止しました。' 'Docker 公式手順を使って導入し、再実行してください.'
-  command -v curl >/dev/null || fail 'curl がありません。' 'sudo apt install -y curl を実行してください。'
-  curl -fsSL https://get.docker.com -o /tmp/docker-install.sh || fail '公式インストールスクリプトを取得できません。' 'ネットワークを確認し Docker 公式手順を参照してください。'
-  sudo sh /tmp/docker-install.sh || fail 'Docker インストールに失敗しました。' 'Docker 公式手順のエラーを確認してください。'
-  docker_cmd=$(command -v docker || true)
-fi
-[[ -n $docker_cmd ]] || fail 'Docker Engine がありません。' 'https://docs.docker.com/engine/install/ を参照。Ubuntu は README の導入例を実行してください。'
-"$docker_cmd" compose version >/dev/null 2>&1 || fail 'Docker Compose v2 がありません。' 'Docker Engine の Compose plugin を導入してください: https://docs.docker.com/compose/install/linux/'
+if [[ -z $docker_cmd ]] || ! "$docker_cmd" compose version >/dev/null 2>&1; then
+  offer_install docker || true
+  docker_cmd=${DOCKER_BIN:-$(command -v docker || true)}
+else ok 'Docker / Compose: 導入済み ✓'; fi
+[[ -n $docker_cmd ]] || fail 'Docker Engine がありません。' 'https://docs.docker.com/engine/install/ を参照してください。'
+"$docker_cmd" compose version >/dev/null 2>&1 || fail 'Docker Compose v2 がありません。' '公式 docker-compose-plugin を導入してください。'
 if ! "$docker_cmd" info >/dev/null 2>&1; then
   if command -v getent >/dev/null && getent group docker >/dev/null; then
+    confirm_sudo usermod -aG docker "${USER:-$(id -un)}" || true
     # shellcheck disable=SC2016
     fail '現在のユーザーが Docker を利用できません。' 'sudo usermod -aG docker "$USER" を実行し、ログアウト・再ログインしてください。'
   fi
@@ -78,8 +89,17 @@ printf 'ビルド用の空き容量: %.1f GiB (数 GB 以上を推奨)\n' "$(awk
 ok 'Linux、git、Docker Compose v2 を確認'
 
 step 'チューナーデバイスを確認'
+if known_tuner_usb; then
+  if command -v modinfo >/dev/null && modinfo px4_drv >/dev/null 2>&1; then
+    ok 'px4_drv: 導入済み ✓'
+    if ! tuner_nodes_exist; then confirm_sudo modprobe px4_drv || true; fi
+  elif ! tuner_nodes_exist; then offer_install px4 || true; fi
+fi
+if command -v lspci >/dev/null && lspci | grep -qi NVIDIA; then
+  if command -v nvidia-ctk >/dev/null; then ok 'NVIDIA Container Toolkit: 導入済み ✓'; else offer_install nvidia || true; fi
+fi
 device_count=0
-for p in "$DEV_DIR"/px4video* "$DEV_DIR"/pt3video* "$DEV_DIR"/pxmlt5video* "$DEV_DIR"/isdb2056video*; do [[ -e $p && ! -d $p ]] && device_count=$((device_count+1)); done
+for p in "$DEV_DIR"/px4video* "$DEV_DIR"/pt3video* "$DEV_DIR"/pxmlt*video* "$DEV_DIR"/pxm1urvideo* "$DEV_DIR"/pxs1urvideo* "$DEV_DIR"/isdbt2071video* "$DEV_DIR"/isdb2056video*; do [[ -e $p && ! -d $p ]] && device_count=$((device_count+1)); done
 for adapter_dir in "$DEV_DIR"/dvb/adapter[0-9]*; do
   [[ -d $adapter_dir ]] || continue
   for p in "$adapter_dir"/frontend[0-9]* "$adapter_dir"/demux[0-9]* "$adapter_dir"/dvr[0-9]*; do [[ -e $p && ! -d $p ]] && device_count=$((device_count+1)); done
@@ -97,7 +117,26 @@ if ((device_count==0)); then
   [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || exit 1
 else ok "$device_count 個のデバイスノードを検出"; fi
 
+select_software
+step '録画先を設定'
+select_storage
+
 step 'BonCasRelay 接続先を設定'
+boncas_mode=${BONCAS_MODE:-$(get BONCAS_MODE remote)}
+if [[ -n $TUI ]]; then
+  if [[ ! -f $ENV_FILE && $CARD_DETECTED == 1 ]]; then boncas_mode=local; fi
+  boncas_mode=$(ui --default-item "$boncas_mode" --menu 'カードサーバー (同じマシンのリーダー検出時は local 推奨)' 15 76 3 local 'このマシンで BonCasRelay を動かす' remote '別のマシンを使う' 3>&1 1>&2 2>&3) || exit 1
+elif (( ! YES && ! NONINTERACTIVE )); then
+  ask 'BonCasRelay (local=このマシン / remote=別マシン)' "$boncas_mode"; boncas_mode=$REPLY
+fi
+[[ $boncas_mode == local || $boncas_mode == remote ]] || fail 'BonCasRelay の選択が不正です。' 'local または remote を指定してください。'
+if [[ $boncas_mode == local ]]; then
+  if command -v systemctl >/dev/null && { systemctl is-active --quiet pcscd.service || systemctl is-active --quiet pcscd.socket; }; then
+    message 'ホスト pcscd がカードリーダーを使用中です。同梱コンテナと競合します。pcscd.service / pcscd.socket の停止・無効化を提案します。'
+    confirm_sudo systemctl disable --now pcscd.service pcscd.socket || fail 'ホスト pcscd と競合します。' 'ホスト pcscd を停止するか remote を選択してください。'
+  fi
+  host=boncasrelay; port=6900; fourk=$host; fourkport=$port
+else
 oldhost=$(get BONCAS_B25_HOST 192.168.1.10); oldport=$(get BONCAS_B25_PORT 6900)
 ask 'BonCasRelay ホスト名または IP' "${BONCAS_HOST:-$oldhost}"; host=$REPLY
 ask 'BonCasRelay ポート' "${BONCAS_PORT:-$oldport}"; port=$REPLY
@@ -118,13 +157,11 @@ ask '4K (ACAS) も同じ Relay を使いますか' "${BONCAS_4K_SAME:-$same_defa
 fourk=$host; fourkport=$port
 if [[ $same != はい && $same != y && $same != yes ]]; then ask '4K BonCasRelay ホスト' "$(get BONCAS_4K_HOST "$host")"; fourk=$REPLY; ask '4K BonCasRelay ポート' "$(get BONCAS_4K_PORT 6900)"; fourkport=$REPLY; fi
 
-step '録画先を設定'
-ask '録画保存ディレクトリ' "${RECORDED_DIR:-$(get RECORDED_DIR ./data/recorded)}"; recorded=$REPLY
-mkdir -p "$recorded" || fail "録画先を作成できません: $recorded" '書き込み権限とパスを確認してください。'
-[[ -w $recorded ]] || fail "録画先へ書き込めません: $recorded" '所有者・グループ・権限を確認してください。'
+fi
 
 step 'GPU・追加サービス・ポートを設定'
 gpu_default=none; [[ -d $DEV_DIR/dri ]] && gpu_default=intel; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1 && gpu_default=nvidia
+if command -v lspci >/dev/null && lspci | grep -qi NVIDIA; then gpu_default=nvidia; fi
 existing_compose=$(get COMPOSE_FILE compose.yaml:compose.tuners.yaml:compose.https.yaml)
 https_default=no; [[ $existing_compose == *compose.https.yaml* ]] && https_default=yes
 [[ $existing_compose == *compose.intel.yaml* ]] && gpu_default=intel
@@ -147,9 +184,18 @@ if [[ $gpu == nvidia ]]; then
   if command -v nvidia-ctk >/dev/null 2>&1 && "$docker_cmd" info --format '{{json .Runtimes}}' 2>/dev/null | grep -q 'nvidia'; then nvidia_runtime=1; fi
   if (( ! nvidia_runtime )); then
     printf 'NVIDIA Container Toolkit または Docker NVIDIA runtime がありません。\n導入手順: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html\n確認: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker\n'
-    ask 'GPU 設定未完了のまま続けますか' 'いいえ'
+    if command -v nvidia-ctk >/dev/null; then
+      if confirm_sudo nvidia-ctk runtime configure --runtime=docker; then
+        confirm_sudo systemctl restart docker || fail 'Docker の再起動が必要です。' '確認後に Docker を再起動して再実行してください。'
+      fi
+    fi
+    ask 'GPU 設定未完了のまま続けますか'  'いいえ'
     [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail 'NVIDIA runtime を確認できません。' 'Toolkit を導入・設定後に再実行してください。'
   fi
+fi
+if [[ -n $TUI ]]; then
+  ADVANCED_PORTS=0
+  if confirm '詳細設定でポートを変更しますか？' no; then ADVANCED_PORTS=1; fi
 fi
 ask 'recisdb-proxy Web ポート' "${RECISDB_WEB_PORT:-$(get RECISDB_WEB_PORT 40080)}"; p1=$REPLY
 ask 'EPGStation ポート' "${EPGSTATION_PORT:-$(get EPGSTATION_PORT 8888)}"; p2=$REPLY
@@ -180,6 +226,19 @@ if ((edcb_enabled)); then
   ask 'EDCB 仮想チューナー数 (1〜99)' "$edcb_count"; edcb_count=$REPLY
   [[ $edcb_count =~ ^[1-9][0-9]?$ ]] || fail 'チューナー数が不正です。' '1〜99 を指定してください。'
 fi
+upload_enabled=0; upload_encode=0
+if ((edcb_enabled)); then
+  ask 'EDCB の録画を EPGStation に自動登録しますか (既定: はい)' "${EDCB_EPGSTATION:-$(get SETUP_EDCB_EPGSTATION yes)}"
+  if truth "$REPLY"; then upload_enabled=1; put SETUP_EDCB_EPGSTATION yes; else put SETUP_EDCB_EPGSTATION no; fi
+  if ((upload_enabled && amatsukaze_enabled)); then
+    ask '登録後に Amatsukaze でエンコードしますか (既定: いいえ)' "${EDCB_ENCODE:-$(get SETUP_EDCB_ENCODE no)}"
+    if truth "$REPLY"; then upload_encode=1; put SETUP_EDCB_ENCODE yes; else put SETUP_EDCB_ENCODE no; fi
+  fi
+fi
+put EDCB_EPGSTATION_ENABLED "$upload_enabled"; put EDCB_EPGSTATION_ENCODE "$upload_encode"
+put BONCAS_MODE "$boncas_mode"
+put RECORDED_DIRS_JSON "$storage_json"
+put EDCB_RECORDING_PATHS "$(python3 -c 'import json,sys; print(json.dumps([("/recorded" if i==0 else "/recorded"+str(i+1))+"/edcb" for i,_ in enumerate(json.loads(sys.argv[1]))]))' "$storage_json")"
 put EDCB_WEB_PORT "$edcb_port"; put EDCB_HTTPS_PORT "$edcb_https_port"; put EDCB_TUNER_COUNT "$edcb_count"
 # recisdb-proxy always runs as RUN_UID/RUN_GID so it can write data/ and config/ owned by the host user.
 if true; then
@@ -210,6 +269,8 @@ if ((edcb_enabled)); then
   compose+=:compose.edcb.yaml
   (( ! https_enabled )) || compose+=:compose.edcb.https.yaml
 fi
+[[ $boncas_mode != local ]] || compose+=:compose.boncasrelay.yaml
+if [[ $(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$storage_json") -gt 1 ]]; then compose+=:compose.storage.yaml; fi
 # Correct the obsolete fork branch while preserving custom refs.
 if [[ $(get EPGSTATION_REF main) == master ]]; then put EPGSTATION_REF main; echo 'EPGSTATION_REF=master を main に更新します。'; fi
 put COMPOSE_FILE "$compose"; put BONCAS_B25_HOST "$host"; put BONCAS_B25_PORT "$relay_port"; put BONCAS_4K_HOST "$fourk"; put BONCAS_4K_PORT "$fourkport"
@@ -230,7 +291,18 @@ mariadb_password=$(get MARIADB_PASSWORD ''); root_password=$(get MARIADB_ROOT_PA
 [[ -n $root_password && $root_password != change-me-too ]] || root_password=$(openssl rand -hex 24)
 put MARIADB_PASSWORD "$mariadb_password"; put MARIADB_ROOT_PASSWORD "$root_password"
 
-step '環境設定・ディレクトリ・チューナー Compose を生成'
+message "設定確認
+構成: $compose
+録画先 (先頭が既定): $storage_json
+Relay: $host:$relay_port / 4K: $fourk:$fourkport
+GPU: $gpu
+UID:GID: $run_uid:$run_gid
+HTTP: $p1 / $p2 / $p3 / EDCB $edcb_port
+HTTPS: $p4 / $p5 / EDCB $edcb_https_port
+Amatsukaze: $amatsukaze_port
+EDCB 自動登録: $upload_enabled / エンコード: $upload_encode"
+confirm 'この内容でセットアップしますか？' yes || exit 1
+step '環境設定・ディレクトリ・チューナー Compose を生成' 
 if [[ ! -f $ENV_FILE ]]; then cp .env.example "$ENV_FILE"; fi
 if [[ -s $SETTINGS_FILE ]]; then
   if [[ -f $ENV_FILE ]]; then stamp=$(date +%Y%m%d%H%M%S%N); cp -p "$ENV_FILE" "$ENV_FILE.bak.$stamp"; chmod 600 "$ENV_FILE.bak.$stamp"; fi
@@ -254,7 +326,10 @@ PYENV
   mv "$tmp" "$ENV_FILE"
 fi
 chmod 600 "$ENV_FILE"
-if ((edcb_enabled)); then mkdir -p data/edcb "$recorded/edcb"; fi
+if ((edcb_enabled)); then
+  mkdir -p data/edcb
+  while IFS= read -r directory; do mkdir -p -- "$directory/edcb"; done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$storage_json")
+fi
 mkdir -p data/recisdb data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
 if ((amatsukaze_enabled)); then
   for dir in avs bat config data drcs JL logo profile input output; do mkdir -p "data/amatsukaze/$dir"; done
@@ -269,20 +344,21 @@ fi
 # Create service config only when missing; existing files (user edits) are kept.
 python3 "$ROOT/scripts/render-config.py" --root "$ROOT" --env "$ENV_FILE" first-run || fail '設定ファイルを生成できません。' 'scripts/render-config.py の出力と config/ の権限を確認してください。'
 ok '.env・設定ファイル・データ領域を準備'
+message '既存の設定ファイルは維持しました。録画先や Relay を変更した場合は make regen-config SERVICE=epgstation / konomitv / edcb / recisdb-proxy で差分を確認して反映してください。録画先の削除・順序変更は既存録画 DB のパスに影響します。旧マウントを削除する前に確認してください。' 
 
 if ((amatsukaze_enabled)); then
   printf 'Amatsukaze WebUI: http://<録画ホストIP>:%s/\nEPGStation のエンコード設定に Amatsukaze を自動追加します。初回起動で EPGStation プロファイルを作成します。\nWebUI で局別ロゴを登録し、サービス設定の CM 解析無効を解除してから録画のエンコードを選択してください。\n' "$amatsukaze_port"
 fi
-if ((RECONFIGURE)); then echo '設定を更新しました。反映には make build && make up を実行してください。'; exit 0; fi
+if ((RECONFIGURE)); then message '設定を更新しました。反映には make build && make up を実行してください。既存設定の再生成が必要な場合は上記案内も確認してください。'; exit 0; fi
 if ((NO_BUILD)); then echo 'ビルドを省略しました。'; else
   step 'Compose 設定を検証'
   "$docker_cmd" compose config >/dev/null || fail 'docker compose config が失敗しました。' '.env、Compose ファイル、KonomiTV_SOURCE を確認してください。'
   step 'Docker イメージをビルド (数分以上かかる場合があります)'
-  "$docker_cmd" compose build || fail 'Docker イメージのビルドに失敗しました。' 'ログの最初のエラー、空き容量、ネットワークを確認してください。'
+  run_logged build "$docker_cmd" compose build || fail 'Docker イメージのビルドに失敗しました。' 'ログの最初のエラー、空き容量、ネットワークを確認してください。'
 fi
-if ((NO_START)); then echo '起動を省略しました。docker compose up -d で起動できます。'; exit 0; fi
+if ((NO_START)); then message "設定完了。起動を省略しました。make build && make up で起動できます。\nrecisdb-proxy http://<IP>:$p1/ / EPGStation http://<IP>:$p2/\nKonomiTV https://<IPをハイフン区切り>.local.konomi.tv:$p3/\nEDCB 有効時 http://<IP>:$edcb_port/E3/ / Amatsukaze 有効時 http://<IP>:$amatsukaze_port/\n次にチャンネルスキャン・make edcb-chset・実録画を確認してください。"; exit 0; fi
 step 'コンテナを起動'
-"$docker_cmd" compose up -d || fail 'コンテナ起動に失敗しました。' 'docker compose logs と docker compose ps で原因を確認してください。'
+run_logged start "$docker_cmd" compose up -d || fail 'コンテナ起動に失敗しました。' 'docker compose logs と docker compose ps で原因を確認してください。'
 step 'サービスの起動を待機'
 ipaddr=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
 [[ -n $ipaddr ]] || ipaddr=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
@@ -291,11 +367,11 @@ deadline=$((SECONDS+180)); services_ready=0; http_ready=0
 konomi_host=${ipaddr//./-}.local.konomi.tv
 while ((SECONDS<deadline)); do
   running_services=$("$docker_cmd" compose ps --status running --services 2>/dev/null || true)
-  if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services" && { (( ! amatsukaze_enabled )) || grep -qx amatsukaze <<<"$running_services"; } && { (( ! edcb_enabled )) || grep -qx edcb <<<"$running_services"; }; then
+  if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services" && { (( ! amatsukaze_enabled )) || grep -qx amatsukaze <<<"$running_services"; } && { (( ! edcb_enabled )) || grep -qx edcb <<<"$running_services"; } && { [[ $boncas_mode != local ]] || grep -qx boncasrelay <<<"$running_services"; }; then
     services_ready=1
     if command -v curl >/dev/null 2>&1; then
       if curl -fsS --max-time 3 "http://127.0.0.1:$p1/mirakurun/api/status" >/dev/null 2>&1 && curl -fsS --max-time 3 "http://127.0.0.1:$p2/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p3:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p3/" >/dev/null 2>&1; then
-        if { (( ! edcb_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$edcb_port/" >/dev/null 2>&1; } && { (( ! edcb_enabled || ! https_enabled )) || curl --resolve "$konomi_host:$edcb_https_port:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$edcb_https_port/" >/dev/null 2>&1; } && { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
+        if { [[ $boncas_mode != local ]] || curl -fsS --max-time 3 http://127.0.0.1:6980/ >/dev/null 2>&1; } && { (( ! edcb_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$edcb_port/" >/dev/null 2>&1; } && { (( ! edcb_enabled || ! https_enabled )) || curl --resolve "$konomi_host:$edcb_https_port:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$edcb_https_port/" >/dev/null 2>&1; } && { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
       fi
     else printf 'curl がないため HTTP 応答確認を省略します。必要なら curl を導入して再確認してください。\n'; http_ready=1; break; fi
   fi
@@ -315,3 +391,8 @@ printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\
 token=$("$docker_cmd" compose logs --no-color recisdb-proxy 2>/dev/null | sed -n 's/.*Web API auth token: *//p' | tail -n1 || true)
 [[ -z $token ]] || printf '初回ダッシュボード token: %s\n' "$token"
 printf '次にやること:\n1. recisdb-proxy の BonDriver 画面でチューナー登録・チャンネルスキャン。\n2. EPG 取得を待ち、EPGStation で番組表と予約を確認。\n3. KonomiTV で初期設定し、ライブ視聴を確認。\n'
+
+message "セットアップ完了。recisdb-proxy http://$ipaddr:$p1/ / EPGStation http://$ipaddr:$p2/ / KonomiTV https://$konomi_host:$p3/
+EDCB 有効時 http://$ipaddr:$edcb_port/E3/ / Amatsukaze 有効時 http://$ipaddr:$amatsukaze_port/
+BonCasRelay Web UI はカードホストの http://127.0.0.1:6980/
+次にチャンネルスキャン・make edcb-chset・予約録画・再生を確認してください。"

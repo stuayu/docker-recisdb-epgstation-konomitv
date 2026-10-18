@@ -16,6 +16,8 @@ import re
 import shutil
 import sys
 import json
+import ipaddress
+from storage import directories, targets, mounts
 
 SERVICES = {
     'recisdb-proxy': {
@@ -39,6 +41,48 @@ SERVICES = {
         'legacy': ['config/config.yaml'],
     },
 }
+
+for service, filename in [('boncasrelay', 'boncasrelay.ini'), ('edcb-to-epgstation', 'config.yml'),
+                          ('edcb', 'EpgTimerSrv.ini'), ('amatsukaze', 'profile/EPGStation.profile')]:
+    SERVICES[service] = {'template': f'templates/{service}/{filename}.example' if service != 'amatsukaze' else f'templates/{service}/{filename}',
+                         'output': f'config/{service}/{filename}', 'mode': 0o644, 'legacy': []}
+
+
+def specs(name):
+    yield SERVICES[name]
+    if name == 'edcb':
+        for filename in ('Common.ini', 'EpgDataCap_Bon.ini', 'BonDriver_LinuxMirakc.so.ini'):
+            yield {'template': f'templates/edcb/{filename}.example', 'output': f'config/edcb/{filename}', 'mode': 0o644, 'legacy': []}
+
+
+def enabled(name, env):
+    if name == 'edcb-to-epgstation':
+        return env.get('EDCB_EPGSTATION_ENABLED', '0') == '1' and enabled('edcb', env)
+    return name not in ('edcb', 'amatsukaze', 'boncasrelay') or f'compose.{name}.yaml' in env.get('COMPOSE_FILE', '').split(':')
+
+
+def migrate_editable(root, env):
+    # Settings only. Reservations, EPG, logs, queue and caches remain under data/.
+    if enabled('edcb', env):
+        old = root / 'data/edcb'
+        sources = list(old.glob('*.ini')) + list((old / 'Setting').glob('*.ini')) + list((old / 'Setting').glob('*.ChSet4.txt'))
+        sources += [old / 'Setting/ChSet5.txt']
+        for src in sources:
+            dst = root / 'config/edcb' / src.relative_to(old)
+            if src.is_file() and not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                print(f'旧設定を移行: {src} -> {dst} (旧ファイルは残しています)')
+    if enabled('amatsukaze', env):
+        for name in ('avs', 'bat', 'config', 'drcs', 'JL', 'logo', 'profile'):
+            old = root / 'data/amatsukaze' / name
+            if old.is_dir():
+                for src in old.rglob('*'):
+                    dst = root / 'config/amatsukaze' / name / src.relative_to(old)
+                    if src.is_file() and not dst.exists():
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, dst)
+
 
 AMATSUKAZE_ENCODE = """    - id: amatsukaze
       name: Amatsukaze
@@ -110,6 +154,15 @@ def render_epgstation(text, env):
         out = out.replace('${AMATSUKAZE_ENCODE}', AMATSUKAZE_ENCODE).replace('${AMATSUKAZE_CONFIG}', AMATSUKAZE_CONFIG)
     else:
         out = out.replace('${AMATSUKAZE_ENCODE}', '').replace('${AMATSUKAZE_CONFIG}', '')
+    paths = targets(env)
+    entries = [{'name': 'recorded' if i == 0 else f'recorded{i + 1}', 'path': path} for i, path in enumerate(paths)]
+    if enabled('edcb', env):
+        entries += [{'name': 'edcb' if i == 0 else f'edcb{i + 1}', 'path': path + '/edcb'} for i, path in enumerate(paths)]
+    body = '\n'.join('    - name: ' + item['name'] + '\n      path: ' + json.dumps(item['path']) for item in entries)
+    out = re.sub(r'^recorded:\n(?:[ \t]+.*\n)+', 'recorded:\n' + body + '\n', out, count=1, flags=re.M)
+    if enabled('edcb-to-epgstation', env):
+        imports = [item for item in entries if item['name'].startswith('edcb')]
+        out += '\nimportDirs: ' + json.dumps(imports) + '\n'
     if re.search(r'\$\{[A-Z_]+\}', out):
         fail('EPGStation テンプレートに未置換の変数があります。')
     return out
@@ -120,6 +173,20 @@ def render(name, text, env):
         return render_recisdb(text, env)
     if name == 'epgstation':
         return render_epgstation(text, env)
+    if name == 'konomitv':
+        if len(targets(env)) > 1:
+            text = re.sub(r'    recorded_folders: \[.*?\n    \]',
+                          '    recorded_folders: ' + json.dumps(targets(env)), text, flags=re.S)
+    elif name == 'boncasrelay':
+        subnet = str(ipaddress.ip_network(env.get('BONCAS_SUBNET', '172.30.69.0/24')))
+        text = text.replace('${BONCAS_SUBNET}', subnet)
+    elif name == 'edcb-to-epgstation':
+        text = text.replace('${EDCB_EPGSTATION_ENCODE}', 'true' if env.get('EDCB_EPGSTATION_ENCODE') == '1' and amatsukaze_enabled(env) else 'false')
+    elif name == 'edcb':
+        paths = [p + '/edcb' for p in targets(env)]
+        folders = f'RecFolderNum={len(paths)}\n' + '\n'.join(f'RecFolderPath{i}={p}' for i, p in enumerate(paths))
+        text = text.replace('${EDCB_FOLDERS}', folders).replace('${EDCB_TUNER_COUNT}', env.get('EDCB_TUNER_COUNT', '2'))
+        text = text.replace('${EDCB_POST_RECORD}', 'BatFilePath=/opt/edcb-stack/post-record.sh' if enabled('edcb-to-epgstation', env) else '')
     return text
 
 
@@ -139,26 +206,30 @@ def write_new(path, text, mode):
 
 
 def first_run(root, env):
-    for name, spec in SERVICES.items():
-        out = root / spec['output']
-        if out.exists():
-            print(f'既存の設定を維持: {spec["output"]}')
-            check_amatsukaze_section(name, out, env)
+    migrate_editable(root, env)
+    for name in SERVICES:
+        if not enabled(name, env):
             continue
-        legacy = next((root / p for p in spec['legacy'] if (root / p).is_file()), None)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if legacy is not None:
-            shutil.copy2(legacy, out)
-            os.chmod(out, spec['mode'])
-            print(f'旧設定を移行: {legacy.relative_to(root)} -> {spec["output"]} (旧ファイルは残しています)')
-        else:
-            write_new(out, render(name, (root / spec['template']).read_text(encoding='utf-8'), env), spec['mode'])
-            print(f'作成: {spec["output"]} (テンプレート {spec["template"]} から生成)')
-        check_amatsukaze_section(name, out, env)
+        for spec in specs(name):
+            out = root / spec['output']
+            if out.exists():
+                print(f'既存の設定を維持: {spec["output"]}')
+                check_amatsukaze_section(name, out, env)
+                continue
+            legacy = next((root / p for p in spec['legacy'] if (root / p).is_file()), None)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if legacy is not None:
+                shutil.copy2(legacy, out)
+                os.chmod(out, spec['mode'])
+                print(f'旧設定を移行: {legacy.relative_to(root)} -> {spec["output"]} (旧ファイルは残しています)')
+            else:
+                write_new(out, render(name, (root / spec['template']).read_text(encoding='utf-8'), env), spec['mode'])
+                print(f'作成: {spec["output"]} (テンプレート {spec["template"]} から生成)')
+            check_amatsukaze_section(name, out, env)
 
 
-def regen(root, env, name, assume_yes):
-    spec = SERVICES[name]
+def regen(root, env, name, assume_yes, spec=None):
+    spec = SERVICES[name] if spec is None else spec
     out = root / spec['output']
     new = render(name, (root / spec['template']).read_text(encoding='utf-8'), env)
     if not out.exists():
@@ -212,8 +283,10 @@ def main():
     env = read_env(args.env)
     if args.command == 'first-run':
         first_run(root, env)
+        mounts(root, env)
     else:
-        regen(root, env, args.service, args.yes)
+        for spec in specs(args.service):
+            regen(root, env, args.service, args.yes, spec)
 
 
 if __name__ == '__main__':

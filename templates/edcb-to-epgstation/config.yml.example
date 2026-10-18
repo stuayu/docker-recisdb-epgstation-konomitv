@@ -1,0 +1,25 @@
+epgstationUpload:
+  epgstationUrl: "http://epgstation:8888/"
+  parentDirectoryName: "edcb"
+  viewName: "TS"
+  fileType: "ts"
+  recDetailsProgramFolder: null
+  textEncoding: "utf-8"
+  deleteEDCBRecFile: false
+  delayDeleteTime: 0
+  waitRecordedProcess: false
+  waitTimeInterval: 60
+  waitTimeRandomMargin: 0
+  cpuUsageLowerLimit: 0
+  uploadMode: "path"
+  limitRateMBps: 0
+  uploadMaxRetry: 5
+  maxWaitMinutes: 30
+  logLevel: "info"
+epgstationEncode:
+  runEncode: ${EDCB_EPGSTATION_ENCODE}
+  parentDir: "recorded"
+  directory: null
+  isSaveSameDirectory: true
+  mode: "Amatsukaze"
+  removeOriginal: false

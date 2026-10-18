@@ -3,3 +3,5 @@ compose.tuners.yaml
 data/
 config/*/
 backup/
+compose.storage.yaml
+__pycache__/

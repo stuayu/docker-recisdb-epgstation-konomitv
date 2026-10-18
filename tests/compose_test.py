@@ -4,6 +4,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+from storage import mounts
 
 root = Path(__file__).resolve().parents[1]
 binary = os.environ.get('COMPOSE_BIN', 'docker-compose')
@@ -11,7 +15,7 @@ env = dict(os.environ, MARIADB_PASSWORD='compose-test', MARIADB_ROOT_PASSWORD='c
 # Ignore a caller's selected default overrides: this test supplies every file.
 env.pop('COMPOSE_FILE', None)
 env.pop('COMPOSE_PROFILES', None)
-for edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, True), (False, True), ('none', 'intel', 'nvidia')):
+for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, True), (False, True), (False, True), ('none', 'intel', 'nvidia')):
     files = ['compose.yaml']
     if gpu != 'none':
         files.append(f'compose.{gpu}.yaml')
@@ -25,12 +29,23 @@ for edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, Tru
         files.append('compose.edcb.yaml')
         if https:
             files.append('compose.edcb.https.yaml')
+    if relay:
+        files.append('compose.boncasrelay.yaml')
     command = [binary, '--env-file', '.env.example']
     for file in files:
         command.extend(['-f', file])
     output = subprocess.run(command + ['config', '--format', 'json'], cwd=root, env=env,
                             capture_output=True, text=True, check=True)
-    services = json.loads(output.stdout)['services']
+    config = json.loads(output.stdout)
+    services = config['services']
+    assert ('boncasrelay' in services) == relay
+    if relay:
+        card = services['boncasrelay']
+        assert [p['target'] for p in card['ports']] == [6980]
+        assert card['ports'][0]['host_ip'] == '127.0.0.1'
+        assert 'c 189:* rw' in card['device_cgroup_rules']
+        assert config['networks']['default']['ipam']['config'][0]['subnet'] == '172.30.69.0/24'
+        assert not card.get('privileged')
     assert ('edcb' in services) == edcb
     assert ('amatsukaze' in services) == amatsukaze
     assert ('https-gateway' in services) == https
@@ -54,4 +69,23 @@ for edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, Tru
         ama = services['amatsukaze']
         assert bool(ama.get('devices')) == (gpu == 'intel')
         assert bool(ama.get('deploy', {}).get('resources', {}).get('reservations', {}).get('devices')) == (gpu == 'nvidia')
-print('PASS: real Docker Compose config matrix (24 combinations: EDCB x Amatsukaze x HTTPS x GPU)')
+print('PASS: real Docker Compose config matrix (48 combinations: BonCasRelay x EDCB x Amatsukaze x HTTPS x GPU)')
+
+with tempfile.TemporaryDirectory() as temp:
+    directory = Path(temp).resolve()
+    settings = {'RECORDED_DIR': str(directory / 'disk one'),
+                'RECORDED_DIRS_JSON': json.dumps([str(directory / 'disk one'), str(directory / 'disk two')]),
+                'COMPOSE_FILE': 'compose.yaml:compose.edcb.yaml:compose.amatsukaze.yaml'}
+    mounts(directory, settings)
+    command = [binary, '--env-file', str(root / '.env.example')]
+    for file in (root / 'compose.yaml', root / 'compose.edcb.yaml', root / 'compose.amatsukaze.yaml', directory / 'compose.storage.yaml'):
+        command.extend(['-f', str(file)])
+    output = subprocess.run(command + ['config', '--format', 'json'], cwd=root,
+                            env=dict(env, RECORDED_DIR=settings['RECORDED_DIR']), capture_output=True, text=True, check=True)
+    services = json.loads(output.stdout)['services']
+    for name in ('epgstation', 'edcb', 'amatsukaze', 'konomitv'):
+        target = '/host-rootfs/recorded2' if name == 'konomitv' else '/recorded2'
+        volume = next(v for v in services[name]['volumes'] if v['target'] == target)
+        assert volume['source'] == str(directory / 'disk two')
+        assert volume.get('read_only', False) == (name == 'konomitv')
+print('PASS: real Compose merge of multiple recording folders with spaces across EPGStation/EDCB/KonomiTV/Amatsukaze')

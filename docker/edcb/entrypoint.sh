@@ -11,10 +11,12 @@ else
     python3 "$stack/chset.py" || echo '[edcb] ChSet 未取得。スキャン後 make edcb-chset を実行してください。' >&2
 fi
 if [ "$(id -u)" = 0 ]; then
-    chown -R "${RUN_UID:-1000}:${RUN_GID:-1000}" "$root"
+    chown -R "${RUN_UID:-1000}:${RUN_GID:-1000}" "$root" "${EDCB_CONFIG_DIR:-$root}"
     # Only this stack's new recording subdirectory, never existing recordings.
     chown "${RUN_UID:-1000}:${RUN_GID:-1000}" "${EDCB_RECORDED:-/recorded/edcb}"
 fi
+# chset.py replaces files atomically in config/; expose newly created files too.
+python3 "$stack/configure.py"
 [ "${1:-}" != edcb-chset ] || exit 0
 cd "$root"
 if [ "$(id -u)" = 0 ]; then exec gosu "${RUN_UID:-1000}:${RUN_GID:-1000}" "$@"; fi

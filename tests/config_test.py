@@ -152,6 +152,10 @@ with tempfile.TemporaryDirectory() as temp:
     (repo6 / 'data/recisdb/recisdb-proxy.db').write_text('db', encoding='utf-8')
     (repo6 / 'data/recorded').mkdir(parents=True)
     (repo6 / 'data/recorded/program.ts').write_text('video', encoding='utf-8')
+    (repo6 / 'data/recorded2').mkdir()
+    (repo6 / 'data/recorded2/extra.ts').write_text('extra video')
+    with (repo6 / '.env').open('a') as file:
+        file.write('RECORDED_DIRS_JSON=["./data/recorded", "./data/recorded2"]\n')
     (repo6 / 'data/mariadb').mkdir(parents=True)
     (repo6 / 'data/mariadb/ibdata1').write_text('raw', encoding='utf-8')
     stub = base / 'docker'
@@ -178,7 +182,7 @@ with tempfile.TemporaryDirectory() as temp:
         check('.env' in names and 'config/epgstation/config.yml' in names, 'config and .env archived')
         check('data/recisdb/recisdb-proxy.db' in names, 'service data archived')
         check('db/epgstation.sql' in names, 'MariaDB dump archived')
-        check(not any(n.startswith('data/recorded') for n in names), 'recorded files excluded')
+        check(not any(n.startswith('data/recorded') for n in names), 'all selected recorded folders excluded')
         check(not any(n.startswith('data/mariadb') for n in names), 'raw MariaDB directory excluded')
         check(b'CREATE TABLE t' in tar.extractfile('db/epgstation.sql').read(), 'dump content archived')
 
@@ -191,3 +195,48 @@ with tempfile.TemporaryDirectory() as temp:
     check(not (repo7 / 'data/recorded/program.ts').exists(), 'recorded files not restored from archive')
 
 print('PASS: config first-run generation, migration, regen backup/diff/inode, unsafe values, backup excludes recorded files, restore imports dump')
+
+# Optional configurations and migration preserve runtime databases and user settings.
+with tempfile.TemporaryDirectory() as temp:
+    base = Path(temp)
+    repo = make_repo(base / 'optional')
+    old = repo / 'data/edcb'
+    (old / 'Setting').mkdir(parents=True)
+    (old / 'Common.ini').write_text('[SET]\nUserSetting=kept\n')
+    (old / 'Setting/HttpPublic.ini').write_text('[E3]\nuser=kept\n')
+    (old / 'Setting/ChSet5.txt').write_text('channels\n')
+    (old / 'Setting/Reserve.txt').write_text('reservation runtime\n')
+    (repo / 'data/amatsukaze/config').mkdir(parents=True)
+    (repo / 'data/amatsukaze/config/AmatsukazeServer.xml').write_text('<user/>')
+    env = write_env(repo / '.env', compose=AMATSUKAZE_COMPOSE + ':compose.edcb.yaml:compose.boncasrelay.yaml',
+                    extra='EDCB_EPGSTATION_ENABLED=1\nEDCB_EPGSTATION_ENCODE=1\nRECORDED_DIRS_JSON=["./data/recorded", "./data/recorded2"]\n')
+    render(repo, env, ['first-run'])
+    assert (repo / 'config/edcb/Common.ini').read_bytes() == (old / 'Common.ini').read_bytes()
+    assert (old / 'Setting/Reserve.txt').read_text() == 'reservation runtime\n'
+    assert not (repo / 'config/edcb/Setting/Reserve.txt').exists()
+    assert (repo / 'config/edcb/Setting/HttpPublic.ini').read_text() == '[E3]\nuser=kept\n'
+    assert (repo / 'config/edcb/Setting/ChSet5.txt').read_text() == 'channels\n'
+    assert (repo / 'config/amatsukaze/config/AmatsukazeServer.xml').read_text() == '<user/>'
+    assert (repo / 'data/amatsukaze/config/AmatsukazeServer.xml').read_text() == '<user/>'
+    uploader = ruby_yaml(repo / 'config/edcb-to-epgstation/config.yml')
+    assert uploader['epgstationUpload']['epgstationUrl'] == 'http://epgstation:8888/'
+    assert uploader['epgstationUpload']['uploadMode'] == 'path'
+    assert uploader['epgstationUpload']['deleteEDCBRecFile'] is False
+    assert uploader['epgstationEncode']['runEncode'] is True
+    assert uploader['epgstationEncode']['mode'] == 'Amatsukaze'
+    # Disabled services do not generate settings or batch hooks.
+    disabled = make_repo(base / 'disabled')
+    render(disabled, write_env(disabled / '.env'), ['first-run'])
+    assert not (disabled / 'config/boncasrelay').exists()
+    assert not (disabled / 'config/edcb-to-epgstation').exists()
+    assert not (disabled / 'config/edcb').exists()
+    # Regen updates only requested settings with backups.
+    render(repo, env, ['regen', '--service', 'edcb', '--yes'])
+    assert 'RecFolderPath1=/recorded2/edcb' in (repo / 'config/edcb/Common.ini').read_text()
+    assert list((repo / 'config/edcb/backup').glob('Common.ini.*'))
+    epg = ruby_yaml(repo / 'config/epgstation/config.yml')
+    assert {item['name']: item['path'] for item in epg['importDirs']} == {'edcb': '/recorded/edcb', 'edcb2': '/recorded2/edcb'}
+    assert {item['name']: item['path'] for item in epg['recorded']} == {
+        'recorded': '/recorded', 'recorded2': '/recorded2', 'edcb': '/recorded/edcb', 'edcb2': '/recorded2/edcb'}
+
+print('PASS: optional Relay/uploader settings, encode opt-in, EDCB/Amatsukaze migration, runtime data retained, multiple storage configuration, EDCB regen backup')

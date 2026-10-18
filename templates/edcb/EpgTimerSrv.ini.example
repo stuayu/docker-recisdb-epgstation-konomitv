@@ -1,0 +1,26 @@
+[SET]
+EnableHttpSrv=1
+HttpPort=5510
+HttpPublicFolder=/var/local/edcb/HttpPublic
+HttpAccessControlList=+127.0.0.1,+10.0.0.0/8,+172.16.0.0/12,+192.168.0.0/16
+# Material WebUI (E3) keeps one Civetweb thread per SSE view; the default 5 stalls tabs.
+HttpNumThreads=50
+EnableTCPSrv=0
+RecEndMode=0
+[BonDriver_LinuxMirakc.so]
+Count=${EDCB_TUNER_COUNT}
+Priority=1
+GetEpg=1
+EPGCount=1
+[EPG_CAP]
+Count=2
+0=06:00
+0Select=1
+1=18:00
+1Select=1
+[TVTEST]
+Num=1
+0=BonDriver_LinuxMirakc.so
+[REC_DEF]
+RecMode=3
+${EDCB_POST_RECORD}

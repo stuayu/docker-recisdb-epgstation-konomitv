@@ -117,3 +117,36 @@ with tempfile.TemporaryDirectory() as temp:
         server.shutdown()
         server.server_close()
 print('PASS: EDCB INI nonoverwrite, authenticated ChSet download, index translation, empty scan, failure preservation, refresh backup')
+
+# Unix macro adaptation must preserve Unicode paths and date rollover.
+spec = importlib.util.spec_from_file_location('post_record', ROOT / 'docker/edcb/post-record.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+macros = module.environment({'FilePath': '/recorded/edcb/番組 name.ts', 'FileName': '番組 name', 'Title': '番組',
+                             'StartTime': '2026-12-31T23:59:00+09:00', 'DurationSecond': '120',
+                             'ONID10': '4', 'SID10': '101'})
+assert macros['FILEPATH'] == '/recorded/edcb/番組 name.ts' and macros['TITLE'] == '番組'
+assert macros['SDYYYY'] == '2026' and macros['EDYYYY'] == '2027'
+assert macros['EDMM'] == '01' and macros['EDDD'] == '01' and macros['ETMM'] == '01'
+with tempfile.TemporaryDirectory() as temp:
+    base = Path(temp)
+    binary = base / 'edcb_to_epgstation_ts'
+    binary.write_text('#!/bin/sh\nexit 0\n'); binary.chmod(0o755)
+    env = dict(os.environ, EDCB_ROOT=str(base / 'data'), EDCB_CONFIG_DIR=str(base / 'config'),
+               EDCB_DEFAULTS=str(base / 'defaults'), EDCB_LIB=str(base / 'lib'),
+               EDCB_RECORDED=str(base / 'recorded'), EDCB_UPLOAD_BINARY=str(binary),
+               EDCB_EPGSTATION_ENABLED='1', EDCB_RECORDING_PATHS='["/recorded/edcb", "/recorded2/edcb"]')
+    (base / 'config/Setting').mkdir(parents=True)
+    (base / 'config/Setting/ChSet5.txt').write_text('user channels')
+    subprocess.run(['python3', str(ROOT / 'docker/edcb/configure.py')], env=env, check=True)
+    assert (base / 'data/Common.ini').is_symlink()
+    assert (base / 'data/Setting/ChSet5.txt').is_symlink()
+    assert 'RecFolderPath1=/recorded2/edcb' in (base / 'config/Common.ini').read_text()
+    assert 'BatFilePath=/opt/edcb-stack/post-record.sh' in (base / 'config/EpgTimerSrv.ini').read_text()
+    assert (base / 'data/upload/edcb_to_epgstation_ts').is_file()
+    assert (base / 'data/upload/config.yml').is_symlink()
+    (base / 'data/Setting/Reserve.txt').write_text('reservation')
+    subprocess.run(['python3', str(ROOT / 'docker/edcb/configure.py')], env=env, check=True)
+    assert not (base / 'config/Setting/Reserve.txt').exists()
+    assert (base / 'data/Setting/Reserve.txt').read_text() == 'reservation'
+print('PASS: EDCB Unix macro adapter, date rollover, config symlinks, uploader bootstrap, reservation data separation')

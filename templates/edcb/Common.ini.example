@@ -1,0 +1,3 @@
+[SET]
+DataSavePath=/var/local/edcb/Setting
+${EDCB_FOLDERS}

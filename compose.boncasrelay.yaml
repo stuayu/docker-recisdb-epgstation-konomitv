@@ -1,0 +1,25 @@
+services:
+  boncasrelay:
+    build:
+      context: .
+      dockerfile: docker/boncasrelay/Dockerfile
+      args:
+        BONCASRELAY_REPO: ${BONCASRELAY_REPO:-https://github.com/stuayu/BonCasRelay.git}
+        BONCASRELAY_REF: ${BONCASRELAY_REF:-main}
+    restart: unless-stopped
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ./config/boncasrelay:/config
+    device_cgroup_rules:
+      - 'c 189:* rw'
+    ports:
+      - '127.0.0.1:6980:6980'
+  recisdb-proxy:
+    depends_on:
+      boncasrelay:
+        condition: service_started
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${BONCAS_SUBNET:-172.30.69.0/24}

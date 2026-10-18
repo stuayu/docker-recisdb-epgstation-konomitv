@@ -89,7 +89,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--refresh', action='store_true')
     args = parser.parse_args()
-    setting = Path(os.environ.get('EDCB_ROOT', '/var/local/edcb')) / 'Setting'
+    setting = Path(os.environ.get('EDCB_CONFIG_DIR', os.environ.get('EDCB_ROOT', '/var/local/edcb'))) / 'Setting'
     paths = [setting / 'BonDriver_LinuxMirakc(LinuxMirakc).ChSet4.txt', setting / 'ChSet5.txt']
     if not args.refresh and any(p.exists() for p in paths):
         if all(p.stat().st_size > 3 for p in paths if p.exists()) and all(p.exists() for p in paths):

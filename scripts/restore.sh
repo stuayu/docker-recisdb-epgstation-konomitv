@@ -22,6 +22,7 @@ tar -xzf "$archive" -C "$work"
 "$DOCKER_BIN" compose stop >/dev/null 2>&1 || true
 [[ -d $work/config ]] && { mkdir -p config; cp -a "$work/config/." config/; }
 [[ -d $work/data ]] && { mkdir -p data; cp -a "$work/data/." data/; }
+[[ ! -f $work/compose.storage.yaml ]] || cp "$work/compose.storage.yaml" ./compose.storage.yaml
 if [[ -f $work/.env ]]; then
   if [[ -f .env ]]; then
     printf '既存の .env は変更していません。アーカイブの .env は %s に保存しました。\n' "$ROOT/.env.from-archive"
