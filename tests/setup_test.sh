@@ -67,26 +67,33 @@ SERVER_PORT=$(cat "$TMP/server-port")
 [[ $SERVER_PORT =~ ^[0-9]+$ ]] || fail 'temporary relay server did not start'
 
 run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU="${1:-none}" DB="${2:-sqlite}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
-run_setup none >"$TMP/out"
-grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml$' "$ENV_FILE" || fail 'default COMPOSE_FILE'
+HTTPS=yes run_setup none >"$TMP/out"
+grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'default HTTPS COMPOSE_FILE'
 grep -q '^CUSTOM_KEEP=preserved$' "$ENV_FILE" || fail 'unrelated env key not preserved'
 grep -q "$TMP/dev/px4video0:/dev/px4video0" "$TUNERS_COMPOSE_FILE" || { cat "$TUNERS_COMPOSE_FILE" >&2; fail 'tuner device generated'; }
 backup_found=0; for backup in "$ENV_FILE".bak.*; do [[ -f $backup ]] && backup_found=1; done
 ((backup_found)) || fail 'backup not created'
 
+HTTPS=no run_setup none >"$TMP/out"
+grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml$' "$ENV_FILE" || fail 'HTTPS disabled COMPOSE_FILE'
+grep -q '^RECISDB_HTTPS_PORT=40443$' "$ENV_FILE" || fail 'HTTPS port setting preserved when disabled'
+HTTPS=yes run_setup none >"$TMP/out"
+grep -q ':compose.https.yaml$' "$ENV_FILE" || fail 'HTTPS re-enable COMPOSE_FILE'
+
 mkdir -p "$TMP/dev/dri"; touch "$TMP/dev/dri/renderD128"; run_setup intel >"$TMP/out"
-grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.intel.yaml$' "$ENV_FILE" || fail 'Intel COMPOSE_FILE'
+grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.intel.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'Intel COMPOSE_FILE'
 rm "$TMP/dev/dri/renderD128"; if run_setup intel >"$TMP/intel-missing" 2>&1; then fail 'Intel GPU without render node should stop by default'; fi
 grep -q 'renderD\* がありません' "$TMP/intel-missing" || fail 'Intel render node guidance'
 rmdir "$TMP/dev/dri"
 if NVIDIA_OK=1 NVIDIA_TOOLKIT_OK=0 run_setup nvidia >"$TMP/nvidia-missing" 2>&1; then fail 'NVIDIA runtime missing should stop by default'; fi
 grep -q 'NVIDIA Container Toolkit' "$TMP/nvidia-missing" || fail 'NVIDIA toolkit guidance'
 NVIDIA_OK=1 NVIDIA_TOOLKIT_OK=1 run_setup nvidia >"$TMP/out"
-grep -q ':compose.nvidia.yaml$' "$ENV_FILE" || fail 'NVIDIA COMPOSE_FILE'
+grep -q ':compose.nvidia.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'NVIDIA COMPOSE_FILE'
 NVIDIA_OK=0 run_setup none >"$TMP/out"
 grep -q '^docker compose build$' "$DOCKER_CALLS" && fail 'no-build should skip build'
 run_setup none mariadb >"$TMP/out"
-grep -q ':compose.mariadb.yaml$' "$ENV_FILE" || fail 'MariaDB COMPOSE_FILE'
+grep -q ':compose.mariadb.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'MariaDB COMPOSE_FILE'
+grep -q ':compose.https.yaml$' "$ENV_FILE" || fail 'HTTPS compose lost with MariaDB'
 grep -q '^COMPOSE_PROFILES=mariadb$' "$ENV_FILE" || fail 'MariaDB profile not enabled'
 if grep -q '^MARIADB_PASSWORD=change-me$' "$ENV_FILE" || grep -q '^MARIADB_ROOT_PASSWORD=change-me-too$' "$ENV_FILE"; then fail 'MariaDB password was not generated'; fi
 
@@ -104,6 +111,25 @@ grep -q '^compose up -d$' "$DOCKER_CALLS" || fail 'up args'
 grep -q '^compose config$' "$DOCKER_CALLS" || fail 'config args'
 grep -q 'test-token' "$TMP/full" || fail 'dashboard token'
 grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:7000:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:7000/' "$CURL_CALLS" || fail 'KonomiTV HTTPS probe URL'
-grep -q 'KonomiTV: https://192-168-1-30.local.konomi.tv:7000/' "$TMP/full" || fail 'KonomiTV HTTPS URL output'
+grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:40443:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:40443/' "$CURL_CALLS" || fail 'recisdb HTTPS probe URL'
+grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:8443:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:8443/' "$CURL_CALLS" || fail 'EPGStation HTTPS probe URL'
+grep -q 'KonomiTV HTTPS: https://192-168-1-30.local.konomi.tv:7000/' "$TMP/full" || fail 'KonomiTV HTTPS URL output'
 grep -q 'px4_drv を検出できません' "$TMP/full" || fail 'missing px4_drv guidance'
+
+cat > "$TMP/akebi-stub" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$AKEBI_ARGS"
+exec sleep 30
+EOF
+chmod +x "$TMP/akebi-stub"
+: > "$TMP/akebi.args"
+AKEBI_ARGS="$TMP/akebi.args" AKEBI_BIN="$TMP/akebi-stub" AKEBI_ROUTES='40443=http://recisdb-proxy:40080/ 8443=http://epgstation:8888/' AKEBI_LISTEN_HOST=127.0.0.1 TMPDIR="$TMP" "$ROOT/docker/https-gateway/entrypoint.sh" >"$TMP/gateway.log" 2>&1 &
+GATEWAY_PID=$!
+for _ in {1..50}; do [[ $(wc -l < "$TMP/akebi.args" 2>/dev/null || echo 0) -ge 2 ]] && break; sleep 0.1; done
+grep -q -- '--listen-address 127.0.0.1:40443 --proxy-pass-url http://recisdb-proxy:40080/ --keyless-server-url https://akebi.konomi.tv/' "$TMP/akebi.args" || fail 'recisdb Akebi args'
+grep -q -- '--listen-address 127.0.0.1:8443 --proxy-pass-url http://epgstation:8888/ --keyless-server-url https://akebi.konomi.tv/' "$TMP/akebi.args" || fail 'EPGStation Akebi args'
+kill -TERM "$GATEWAY_PID" 2>/dev/null || true
+wait "$GATEWAY_PID" 2>/dev/null || true
+if AKEBI_BIN="$TMP/akebi-stub" AKEBI_ROUTES='bad-route' "$ROOT/docker/https-gateway/entrypoint.sh" >"$TMP/bad-route" 2>&1; then fail 'invalid Akebi route should fail'; fi
+grep -q 'expected PORT=URL' "$TMP/bad-route" || fail 'invalid route explanation'
 echo 'PASS: --yes generation, backup, GPU compose selection, relay failure, OS guard, build/up stubs'

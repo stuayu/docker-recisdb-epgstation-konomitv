@@ -6,7 +6,8 @@ setup:
 status:
 	docker compose ps
 	@host=$$(hostname -I 2>/dev/null | awk '{print $$1}'); [ -n "$$host" ] || host=localhost; \
-	. ./.env; printf 'recisdb-proxy: http://%s:%s/\nEPGStation: http://%s:%s/\nKonomiTV: http://%s:%s/\n' "$$host" "$$RECISDB_WEB_PORT" "$$host" "$$EPGSTATION_PORT" "$$host" "$$KONOMITV_PORT"
+	. ./.env; printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$$host" "$$RECISDB_WEB_PORT" "$$host" "$$EPGSTATION_PORT" "$$(printf '%s' "$$host" | tr '.' '-')" "$$KONOMITV_PORT"; \
+	case ":$$COMPOSE_FILE:" in *:compose.https.yaml:*) printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStation HTTPS: https://%s:%s/\n' "$$(printf '%s' "$$host" | tr '.' '-')" "$$RECISDB_HTTPS_PORT" "$$(printf '%s' "$$host" | tr '.' '-')" "$$EPGSTATION_HTTPS_PORT";; esac
 
 update:
 	@source=$$(sed -n 's/^KONOMITV_SOURCE=//p' .env | tail -n1); \

@@ -22,7 +22,8 @@ usage() {
 
 非対話環境変数: BONCAS_HOST, BONCAS_PORT, BONCAS_4K_SAME,
 RECORDED_DIR, GPU (none|intel|nvidia), DB (sqlite|mariadb),
-RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, KONOMITV_SOURCE
+RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, HTTPS (yes|no),
+RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE
 EOF
 }
 while (($#)); do
@@ -122,6 +123,7 @@ mkdir -p "$recorded" || fail "録画先を作成できません: $recorded" '書
 step 'GPU・DB・ポートを設定'
 gpu_default=none; [[ -d $DEV_DIR/dri ]] && gpu_default=intel; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1 && gpu_default=nvidia
 existing_compose=$(get COMPOSE_FILE compose.yaml:compose.tuners.yaml)
+https_default=no; [[ $existing_compose == *compose.https.yaml* ]] && https_default=yes
 [[ $existing_compose == *compose.intel.yaml* ]] && gpu_default=intel
 [[ $existing_compose == *compose.nvidia.yaml* ]] && gpu_default=nvidia
 ask 'GPU (none / intel = Intel/AMD /dev/dri / nvidia)' "${GPU:-$gpu_default}"; gpu=$REPLY
@@ -153,9 +155,18 @@ ask 'EPGStation DB (sqlite / mariadb)' "${DB:-$db_default}"; db=$REPLY
 ask 'recisdb-proxy Web ポート' "${RECISDB_WEB_PORT:-$(get RECISDB_WEB_PORT 40080)}"; p1=$REPLY
 ask 'EPGStation ポート' "${EPGSTATION_PORT:-$(get EPGSTATION_PORT 8888)}"; p2=$REPLY
 ask 'KonomiTV ポート' "${KONOMITV_PORT:-$(get KONOMITV_PORT 7000)}"; p3=$REPLY
-compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; [[ $db == mariadb ]] && compose+=:compose.mariadb.yaml
+ask 'HTTPS 経路を有効にしますか' "${HTTPS:-$https_default}"; https=$REPLY
+[[ $https == yes || $https == はい || $https == y || $https == no || $https == いいえ || $https == n ]] || fail 'HTTPS の選択が不正です。' 'yes または no を指定してください。'
+https_enabled=0; [[ $https == yes || $https == はい || $https == y ]] && https_enabled=1
+p4=$(ask 'recisdb-proxy HTTPS ポート' "${RECISDB_HTTPS_PORT:-$(get RECISDB_HTTPS_PORT 40443)}"; printf '%s' "$REPLY")
+p5=$(ask 'EPGStation HTTPS ポート' "${EPGSTATION_HTTPS_PORT:-$(get EPGSTATION_HTTPS_PORT 8443)}"; printf '%s' "$REPLY")
+for port in "$p1" "$p2" "$p3" "$p4" "$p5"; do
+  if [[ ! $port =~ ^[0-9]+$ ]] || ((port<=0 || port>=65536)); then fail 'ポート番号が不正です。' '1〜65535 の数字を指定してください。'; fi
+done
+compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; [[ $db == mariadb ]] && compose+=:compose.mariadb.yaml; ((https_enabled)) && compose+=:compose.https.yaml
 put COMPOSE_FILE "$compose"; put BONCAS_B25_HOST "$host"; put BONCAS_B25_PORT "$port"; put BONCAS_4K_HOST "$fourk"; put BONCAS_4K_PORT "$fourkport"
 put RECORDED_DIR "$recorded"; put RECISDB_WEB_PORT "$p1"; put EPGSTATION_PORT "$p2"; put KONOMITV_PORT "$p3"
+put RECISDB_HTTPS_PORT "$p4"; put EPGSTATION_HTTPS_PORT "$p5"; put AKEBI_KEYLESS_SERVER_URL "${AKEBI_KEYLESS_SERVER_URL:-$(get AKEBI_KEYLESS_SERVER_URL https://akebi.konomi.tv/)}"
 if [[ $db == mariadb ]]; then put COMPOSE_PROFILES mariadb; else put COMPOSE_PROFILES ''; fi
 video_gid=''
 if [[ $gpu == intel ]]; then video_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true); fi
@@ -209,14 +220,18 @@ while ((SECONDS<deadline)); do
   if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services"; then
     services_ready=1
     if command -v curl >/dev/null 2>&1; then
-      if curl -fsS --max-time 3 "http://127.0.0.1:$p1/mirakurun/api/status" >/dev/null 2>&1 && curl -fsS --max-time 3 "http://127.0.0.1:$p2/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p3:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p3/" >/dev/null 2>&1; then http_ready=1; break; fi
+      if curl -fsS --max-time 3 "http://127.0.0.1:$p1/mirakurun/api/status" >/dev/null 2>&1 && curl -fsS --max-time 3 "http://127.0.0.1:$p2/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p3:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p3/" >/dev/null 2>&1; then
+        if (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; then http_ready=1; break; fi
+      fi
     else printf 'curl がないため HTTP 応答確認を省略します。必要なら curl を導入して再確認してください。\n'; http_ready=1; break; fi
   fi
   sleep 3
 done
 if ((services_ready && http_ready)); then ok 'recisdb-proxy、EPGStation、KonomiTV の起動と HTTP 応答を確認'; else echo 'サービス起動または HTTP 応答がタイムアウトしました。docker compose ps / logs を確認してください。'; fi
 step 'アクセス先と次の作業'
-printf 'recisdb-proxy: http://%s:%s/\nEPGStation: http://%s:%s/\nKonomiTV: https://%s:%s/\nBonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
+printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
+if ((https_enabled)); then printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStation HTTPS: https://%s:%s/\n' "$konomi_host" "$p4" "$konomi_host" "$p5"; fi
+printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n'
 token=$("$docker_cmd" compose logs --no-color recisdb-proxy 2>/dev/null | sed -n 's/.*Web API auth token: *//p' | tail -n1 || true)
 [[ -z $token ]] || printf '初回ダッシュボード token: %s\n' "$token"
 printf '次にやること:\n1. recisdb-proxy の BonDriver 画面でチューナー登録・チャンネルスキャン。\n2. EPG 取得を待ち、EPGStation で番組表と予約を確認。\n3. KonomiTV で初期設定し、ライブ視聴を確認。\n'

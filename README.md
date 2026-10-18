@@ -19,6 +19,7 @@ flowchart LR
   browser[LAN 内ブラウザー] --> proxy
   browser --> epg
   browser --> tv
+  browser --> gateway[Akebi HTTPS :40443 / :8443]
 ```
 
 ## 必要なもの
@@ -241,16 +242,34 @@ docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 
 #### 録画ホストのファイアウォール
 
-Compose は 40080 / 8888 / 7000 を全ホストアドレスへ publish します。Docker 公開 port は UFW の通常 INPUT ルールを迂回するため、UFW の allow/deny だけで制限できるとは限りません。まずルーター/VLAN ACL で LAN からだけ許可してください。ホストの iptables backend を使う場合は Docker の `DOCKER-USER` chain を使います。次は `eno1` を実際の外向き NIC、CIDR を実 LAN に置き換える例です。
+Compose は HTTP 40080 / 8888、HTTPS 40443 / 8443、KonomiTV 7000 を全ホストアドレスへ publish します。Docker 公開 port は UFW の通常 INPUT ルールを迂回するため、UFW の allow/deny だけで制限できるとは限りません。まずルーター/VLAN ACL で LAN からだけ許可してください。ホストの iptables backend を使う場合は Docker の `DOCKER-USER` chain を使います。次は `eno1` を実際の外向き NIC、CIDR を実 LAN に置き換える例です。
 
 ```bash
-for port in 40080 8888 7000; do
+for port in 40080 8888 40443 8443 7000; do
   sudo iptables -I DOCKER-USER -i eno1 -p tcp -m conntrack --ctorigdstport "$port" ! -s 192.168.1.0/24 -j DROP
 done
 ```
 
 Nftables backend では対応する Docker nftables firewall 手順に合わせてください。Docker は UFW と公開 port のフィルタリングが互換でないと説明しています: [Docker firewall documentation](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。
 この例は IPv4 用です。ホストで IPv6 を使う場合は IPv6 の公開 port もルーターまたは `ip6tables` / nftables で同じ LAN 制限を設定してください。
+
+## アクセス方法
+
+HTTP 直通は従来どおり使えます。HTTPS 経路を有効にすると、Akebi gateway のポートごとに転送先を選びます。
+
+| システム | HTTP | HTTPS |
+| --- | --- | --- |
+| recisdb-proxy | `http://<録画ホストIP>:40080/` | `https://<IPをハイフン区切り>.local.konomi.tv:40443/` |
+| EPGStation | `http://<録画ホストIP>:8888/` | `https://<IPをハイフン区切り>.local.konomi.tv:8443/` |
+| KonomiTV | 対象外 | `https://<IPをハイフン区切り>.local.konomi.tv:7000/` |
+
+ポート番号で転送先を切り替えます。KonomiTV は内蔵 Akebi を使い、HTTP 直通は対象外です。本体 Uvicorn がコンテナ内 `127.0.0.77` だけで待ち受け、HTTP 直通にはフォーク改造が必要です。
+
+HTTPS gateway は `.env` の `COMPOSE_FILE` に `compose.https.yaml` が含まれる場合だけ起動します。setup.sh の既定は有効です。Akebi は SNI の `*.local.konomi.tv` に対する証明書を Keyless Server から取得し、TLS 終端後に内部 HTTP へ転送します。HTTP から HTTPS への自動リダイレクトはありません。
+
+既定の `akebi.konomi.tv` は KonomiTV 開発者が運営する Keyless Server です。停止や運用方針変更の影響を受けます。自前の Keyless Server に切り替える場合は `.env` の `AKEBI_KEYLESS_SERVER_URL` を変更してください。構築方法は [Akebi README](https://github.com/tsukumijima/Akebi) を参照してください。
+
+`*.local.konomi.tv` の名前解決は DNS Rebinding Protection に遮断される場合があります。ルーターの保護設定を調整するか、端末が公開 DNS を使うよう設定してください。LAN 限定アクセスを維持する場合は、DNS 設定とファイアウォールを合わせてください。
 
 ## かんたんセットアップ (おすすめ)
 
@@ -266,9 +285,9 @@ cd docker-recisdb-epgstation-konomitv
 
 ### 2. ブラウザーで初期設定
 
-1. `http://<録画ホストIP>:40080/` を開きます。recisdb-proxy の初回 token は `docker compose logs recisdb-proxy` の `Web API auth token:` 行です。セットアップがログから表示できた場合はその token を使ってください。
+1. recisdb-proxy は `http://<録画ホストIP>:40080/` または HTTPS 有効時の `https://<IPをハイフン区切り>.local.konomi.tv:40443/` を開きます。初回 token は `docker compose logs recisdb-proxy` の `Web API auth token:` 行です。セットアップがログから表示できた場合はその token を使ってください。
 2. recisdb-proxy の「BonDriver」画面で検出されたチューナーデバイスを登録し、チャンネルスキャンを実行します。チューナーパスは `/dev/px4video0` など実在する名前を使います。
-3. EPGStation (`http://<録画ホストIP>:8888/`) を開き、番組表に番組情報が入るまで待ちます。番組表から番組を選んで予約します。EPGStation の接続先は内部ネットワーク上の `http://recisdb-proxy:40080/mirakurun/` です。
+3. EPGStation は `http://<録画ホストIP>:8888/` または HTTPS 有効時の `https://<IPをハイフン区切り>.local.konomi.tv:8443/` を開き、番組表から予約します。EPGStation の Mirakurun 接続先は内部ネットワーク上の `http://recisdb-proxy:40080/mirakurun/` です。
 4. KonomiTV (`https://<IPのドットをハイフンに変換>.local.konomi.tv:7000/`) を開いて初期設定し、チャンネル一覧からライブ視聴します。例: IP が `192.168.1.20` なら `https://192-168-1-20.local.konomi.tv:7000/`。KonomiTV は Akebi による HTTPS が必要で、IP のドットをハイフンにした `*.local.konomi.tv` が正規 URL です。DNS Rebinding Protection が有効なルーターでは名前解決を止められることがあります。その場合はルーターの保護設定を調整するか、公開 DNS を使います。初回起動には外部 DNS / Keyless サーバーとの通信も必要です。KonomiTV の URL 仕様と DNS 問題は [KonomiTV README](https://github.com/stuayu/KonomiTV#httpsaa-bb-cc-ddlocalkonomitv7000-の-url-について)を参照してください。KonomiTV の Mirakurun backend は予約録画に対応しないため、予約は EPGStation を使います。
 5. 地デジ/BS のスクランブル放送で B25 復号、実際の予約録画と再生を確認します。4K は ACAS 対応構成と dantto4k が別途必要です。
 
@@ -315,10 +334,12 @@ docker compose logs -f recisdb-proxy
 | B25 復号できない | BonCasRelay 未起動、接続元許可漏れ、カード未認識 | `BONCAS_B25_HOST:PORT` へ TCP 接続できるか確認。Relay の `--allow` と Web 設定のリーダー判定を確認 |
 | チューナーが見えない | デバイスノードなし、udev 権限、生成 Compose が古い | `ls /dev`、`VIDEO_GID`、`make tuners`、`docker compose config` を確認 |
 | KonomiTV が Mirakurun URL を拒否 | `/mirakurun/api/tuners` が Mirakurun 互換 `Server: Mirakurun/...` ヘッダーを返さない | recisdb-proxy の互換 API 応答と `http://recisdb-proxy:40080/mirakurun` を確認 |
+| HTTPS 経路に接続できない | `compose.https.yaml` が `COMPOSE_FILE` にない、ポート競合、Keyless 通信失敗 | `.env` の Compose 構成と HTTPS ポート、`docker compose logs https-gateway` を確認 |
+| HTTPS の証明書を取得できない | DNS / Keyless Server への接続不可、Keyless Server の停止 | 外部 DNS と `AKEBI_KEYLESS_SERVER_URL` を確認。自前サーバー利用時は URL を合わせる |
+| HTTPS 名が DNS エラー | ルーターの DNS Rebinding Protection が `*.local.konomi.tv` を遮断 | ルーター設定を調整するか、端末の DNS に公開 DNS を指定 |
 | KonomiTV で TLS / HTTPS エラー | IP 直打ち、HTTP URL、または特殊ホスト名以外を使用 | `https://<IPのドットをハイフンにした値>.local.konomi.tv:<KONOMITV_PORT>/` を開く |
-| KonomiTV URL が DNS エラー | ルーターの DNS Rebinding Protection が `*.local.konomi.tv` を遮断 | ルーター設定を調整するか、端末の DNS に公開 DNS を指定 |
 | ビルドが失敗する | 容量不足、ネットワーク、ソース取得失敗 | `df -h` と Docker ログを確認。必要な空き容量を確保して再実行 |
-| ポートが使用中 | 40080 / 8888 / 7000 を別アプリが使用 | `.env` の `RECISDB_WEB_PORT` / `EPGSTATION_PORT` / `KONOMITV_PORT` を変更し再作成 |
+| ポートが使用中 | 40080 / 8888 / 40443 / 8443 / 7000 を別アプリが使用 | `.env` の `RECISDB_WEB_PORT` / `EPGSTATION_PORT` / `RECISDB_HTTPS_PORT` / `EPGSTATION_HTTPS_PORT` / `KONOMITV_PORT` を変更し再作成 |
 | 録画先に書き込めない | 保存先の権限または空き容量不足 | `RECORDED_DIR` の所有者、書き込み権限、空き容量を確認 |
 | Compose 内から API に届かない | ホスト公開ポートとコンテナ内部ポートの混同 | コンテナ間は `http://recisdb-proxy:40080/mirakurun/` を使用 |
 
@@ -334,6 +355,7 @@ BonCasLink 互換通信は平文・無認証です。BonCasRelay は信頼でき
 | `compose.tuners.yaml` | `make tuners` / setup が `/dev` から生成するチューナー公開設定 |
 | `compose.intel.yaml` / `compose.nvidia.yaml` | KonomiTV コンテナへの GPU デバイス設定 |
 | `compose.mariadb.yaml` | EPGStation の MariaDB profile 設定 |
+| `compose.https.yaml` | 任意の Akebi HTTPS gateway |
 | `.env.example` | 初期環境変数の例 |
 | `setup.sh` | 対話式初回セットアップ |
 | `scripts/gen-tuners.sh` | チューナーデバイスから Compose ファイル生成 |
