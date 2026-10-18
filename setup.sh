@@ -452,6 +452,34 @@ else
   [[ -z ${TUI:-} ]] || scan_args+=(--tui "$TUI")
   ENV_FILE="$ENV_FILE" TUNER_EXCLUDE="$tuner_exclude" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" DOCKER_BIN="$docker_cmd" python3 "$ROOT/scripts/tuner-setup.py" "${scan_args[@]}" || message '受信設定が未完了です。アンテナ・ドライバー・権限を確認し、make scan で再試行してください。セットアップは続行します。'
 fi
+step 'EDCB の番組データを確認'
+if ((edcb_enabled && services_ready)); then
+  edcb_services=''
+  for _ in {1..15}; do
+    if edcb_services=$("$docker_cmd" compose exec -T edcb curl -fsS --max-time 5 http://127.0.0.1:5510/api/EnumService 2>/dev/null); then break; fi
+    sleep 2
+  done
+  if [[ -n $edcb_services ]]; then
+    if [[ $edcb_services != *'<err>'* ]]; then
+      ok 'EDCB の番組データを確認'
+    elif edcb_ctok_json=$("$docker_cmd" compose exec -T edcb curl -fsS --max-time 10 'http://127.0.0.1:5510/api/Common?ctok=epgcap&json=1' 2>/dev/null) \
+      && edcb_ctok=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("epgcap", ""))' <<<"$edcb_ctok_json") \
+      && [[ -n $edcb_ctok ]] \
+      && edcb_epg_response=$("$docker_cmd" compose exec -T edcb curl -fsS --max-time 10 -X POST --data-urlencode "ctok=$edcb_ctok" --data-urlencode 'epgcap=y' 'http://127.0.0.1:5510/api/Common?json=1' 2>&1); then
+      if python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("info") == "EPG取得を開始しました" else 1)' <<<"$edcb_epg_response"; then
+        ok 'EDCB の初回 EPG 取得を開始 (バックグラウンドで取得します)'
+      else
+        message "EDCB の初回 EPG 取得を開始できません: $edcb_epg_response"
+      fi
+    else
+      message 'EDCB に番組データがなく、初回 EPG 取得を要求できません。EDCB Web API とチューナー設定を確認してください。'
+    fi
+  else
+    message 'EDCB の番組データを確認できません。EDCB Web API の起動状態を確認してください。'
+  fi
+else
+  echo 'EDCB 無効、またはサービス未起動のため番組データ確認を省略。'
+fi
 step 'アクセス先と次の作業'
 printf '%s' "$dashboard_urls"
 printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
