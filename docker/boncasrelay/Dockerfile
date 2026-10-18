@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 WORKDIR /src
 RUN git clone "$BONCASRELAY_REPO" . && git fetch origin "$BONCASRELAY_REF" && git checkout --detach FETCH_HEAD \
     && cargo build --locked --release --no-default-features -p boncasrelay
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends pcscd libpcsclite1 libccid tini ca-certificates python3 iproute2 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/boncasrelay /usr/local/libexec/boncasrelay/boncasrelay
 ENV LD_LIBRARY_PATH=/opt/boncasrelay
