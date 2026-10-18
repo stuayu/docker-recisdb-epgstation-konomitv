@@ -68,6 +68,7 @@ services:
       # Host-editable settings created by setup.sh. Read-write: KonomiTV saves its settings here.
       - ./config/konomitv/config.yaml:/code/config.yaml
       - ${RECORDED_DIR}:/host-rootfs/recorded:ro
+      - ${CAPTURE_DIR:-./data/konomitv-capture}:/host-rootfs/data/konomitv-capture
       - ./data/konomitv:/code/server/data
       - ./data/konomitv-logs:/code/server/logs
     ports:

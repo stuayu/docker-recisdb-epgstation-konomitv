@@ -131,8 +131,17 @@ elif (( ! YES && ! NONINTERACTIVE )); then
 fi
 [[ $boncas_mode == local || $boncas_mode == remote ]] || fail 'BonCasRelay の選択が不正です。' 'local または remote を指定してください。'
 if [[ $boncas_mode == local ]]; then
-  if command -v systemctl >/dev/null && { systemctl is-active --quiet pcscd.service || systemctl is-active --quiet pcscd.socket; }; then
-    message 'ホスト pcscd がカードリーダーを使用中です。同梱コンテナと競合します。pcscd.service / pcscd.socket の停止・無効化を提案します。'
+  pcscd_service_active=0 pcscd_socket_active=0
+  if command -v systemctl >/dev/null; then
+    systemctl is-active --quiet pcscd.service && pcscd_service_active=1 || true
+    systemctl is-active --quiet pcscd.socket && pcscd_socket_active=1 || true
+  fi
+  if ((pcscd_service_active || pcscd_socket_active)); then
+    if ((pcscd_service_active)); then
+      message 'ホスト pcscd が起動中です。同梱コンテナと競合します。pcscd.service / pcscd.socket の停止・無効化を提案します。'
+    else
+      message 'pcscd.socket が有効です。リーダー接続時にホスト pcscd が起動し、同梱コンテナと取り合います。pcscd.service / pcscd.socket の停止・無効化を提案します。'
+    fi
     confirm_sudo systemctl disable --now pcscd.service pcscd.socket || fail 'ホスト pcscd と競合します。' 'ホスト pcscd を停止するか remote を選択してください。'
   fi
   host=boncasrelay; port=6900; fourk=$host; fourkport=$port
@@ -241,6 +250,9 @@ if ((upload_enabled)) && [[ $(get EDCB_EPGSTATION_ENABLED 0) != 1 ]]; then
 fi
 put BONCAS_MODE "$boncas_mode"
 put RECORDED_DIRS_JSON "$storage_json"
+capture_dir=${CAPTURE_DIR:-$(get CAPTURE_DIR ./data/konomitv-capture)}
+[[ -n $capture_dir && $capture_dir != *'$'* && $capture_dir != *$'\n'* && $capture_dir != *$'\r'* ]] || fail 'キャプチャ保存先が不正です。' 'CAPTURE_DIR に改行と $ を含まないパスを指定してください。'
+put CAPTURE_DIR "$capture_dir"
 put EDCB_WEB_PORT "$edcb_port"; put EDCB_HTTPS_PORT "$edcb_https_port"; put EDCB_TUNER_COUNT "$edcb_count"
 # recisdb-proxy always runs as RUN_UID/RUN_GID so it can write data/ and config/ owned by the host user.
 if true; then
@@ -333,6 +345,10 @@ if ((edcb_enabled)); then
   while IFS= read -r directory; do mkdir -p -- "$directory/edcb"; done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$storage_json")
 fi
 mkdir -p data/recisdb data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
+mkdir -p -- "$capture_dir"
+if [[ ! -w $capture_dir ]]; then
+  confirm_sudo chown "$run_uid:$run_gid" "$capture_dir" || fail "キャプチャ保存先へ書き込めません: $capture_dir" '実行 UID/GID で書き込めるよう所有者を合わせてください。'
+fi
 if ((amatsukaze_enabled)); then
   for dir in data input output; do mkdir -p "data/amatsukaze/$dir"; done
 fi

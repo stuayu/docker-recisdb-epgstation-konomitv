@@ -1,6 +1,7 @@
 """Config provisioning contract: first-run generation, migration, regeneration with backup, backup and restore."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -60,6 +61,15 @@ def ruby_yaml(path):
     return json.loads(result.stdout)
 
 
+dockerfile = (ROOT / 'docker/recisdb-proxy/Dockerfile').read_text(encoding='utf-8')
+check('FROM node:lts-bookworm-slim AS web-builder' in dockerfile and 'npm ci && npm run build' in dockerfile,
+      'recisdb Dockerfile builds web UI with CI LTS Node and lockfile')
+check('COPY --from=web-builder /src/recisdb-proxy/static/vue /src/recisdb-proxy/static/vue' in dockerfile
+      and dockerfile.index('COPY --from=web-builder') < dockerfile.index('RUN cargo build'),
+      'Vue output is copied to rust-embed folder before cargo build')
+print('PASS: recisdb Dockerfile statically builds and embeds Vue dashboard')
+
+
 with tempfile.TemporaryDirectory() as temp:
     base = Path(temp)
 
@@ -72,6 +82,9 @@ with tempfile.TemporaryDirectory() as temp:
     check('[mmttlv]' not in toml, '4K table removed when no 4K relay')
     check((repo / 'config/konomitv/config.yaml').read_bytes() == (repo / 'templates/konomitv/config.yaml.example').read_bytes(),
           'KonomiTV copied from template')
+    konomi_text = (repo / 'config/konomitv/config.yaml').read_text(encoding='utf-8')
+    check("'/data/konomitv-capture'" in konomi_text and not re.search(r"[A-Za-z]:\\", konomi_text),
+          'KonomiTV generated config uses Docker-mounted capture path and no Windows paths')
     epg = ruby_yaml(repo / 'config/epgstation/config.yml')
     check(epg['mysql']['password'] == 'a:b #c"d\\e $value', 'DB password quoted safely')
     check(not any(p.get('id') == 'amatsukaze' for p in epg['encode']), 'Amatsukaze preset absent when disabled')
@@ -110,6 +123,26 @@ with tempfile.TemporaryDirectory() as temp:
     check((repo3 / 'config/recisdb-proxy/recisdb-proxy.toml').read_text(encoding='utf-8') == 'legacy = true\n', 'legacy copied')
     check(legacy.read_text(encoding='utf-8') == 'legacy = true\n', 'legacy file kept')
     check('旧設定を移行' in out, 'migration message printed')
+
+    # KonomiTV migration replaces only Windows upload folders and backs up the edited file.
+    repo_konomi = make_repo(base / 'konomi-migration')
+    env_konomi = write_env(base / 'konomi-migration/.env')
+    render(repo_konomi, env_konomi, ['first-run'])
+    konomi = repo_konomi / 'config/konomitv/config.yaml'
+    old_konomi = konomi.read_text(encoding='utf-8').replace(
+        "'/data/konomitv-capture'", "'E:\\TV-Capture'") + '\n# user setting retained\n'
+    old_konomi = old_konomi.replace("backend: 'Mirakurun'", "backend: 'EDCB'")
+    konomi.write_text(old_konomi, encoding='utf-8')
+    out = render(repo_konomi, env_konomi, ['first-run']).stdout
+    migrated_konomi = konomi.read_text(encoding='utf-8')
+    backups = list((repo_konomi / 'config/konomitv/backup').glob('config.yaml.*'))
+    check("'/data/konomitv-capture'" in migrated_konomi and 'E:\\TV-Capture' not in migrated_konomi,
+          'Windows KonomiTV upload folder migrated')
+    check("backend: 'EDCB'" in migrated_konomi and '# user setting retained' in migrated_konomi,
+          'KonomiTV migration preserves unrelated edits')
+    check(len(backups) == 1 and backups[0].read_text(encoding='utf-8') == old_konomi,
+          'KonomiTV migration keeps exact pre-migration backup')
+    check('upload_folders' in out and '退避:' in out, 'KonomiTV migration reports replacement and backup')
 
     # 5. Amatsukaze enabled later: the existing file is not rewritten, the user is told to regenerate.
     repo4 = make_repo(base / 'four')
@@ -194,7 +227,7 @@ with tempfile.TemporaryDirectory() as temp:
     check(restored_sql.read_text(encoding='utf-8') == '-- dump\nCREATE TABLE t (id int);\n', 'dump imported')
     check(not (repo7 / 'data/recorded/program.ts').exists(), 'recorded files not restored from archive')
 
-print('PASS: config first-run generation, migration, regen backup/diff/inode, unsafe values, backup excludes recorded files, restore imports dump')
+print('PASS: config first-run generation, KonomiTV Windows path migration/backup, regen backup/diff/inode, unsafe values, backup excludes recorded files, restore imports dump')
 
 # Optional configurations and migration preserve runtime databases and user settings.
 with tempfile.TemporaryDirectory() as temp:

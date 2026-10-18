@@ -81,7 +81,9 @@ case "$*" in
 esac
 exit 0''')
     stub(bin_dir, 'docker', 'echo "docker $*" >> "$CALLS"; exit 0')
-    stub(bin_dir, 'sudo', 'echo "sudo $*" >> "$CALLS"; exit 0')
+    stub(bin_dir, 'sudo', '''echo "sudo $*" >> "$CALLS"
+if [[ $1 == -n && $2 == true ]]; then [[ ${SUDO_OK:-1} == 1 ]]; exit; fi
+exit 0''')
     stub(bin_dir, 'apt-get', 'echo "apt-get $*" >> "$CALLS"; exit 0')
     stub(bin_dir, 'systemctl', 'exit 1')
     stub(bin_dir, 'id', 'case $1 in -u|-g) echo 1000;; -un) echo tester;; esac')
@@ -149,16 +151,26 @@ exit 0''')
     terminal(['./setup.sh', '--storage-only'], repo, env)
     assert not any(line.startswith('docker ') for line in calls.read_text().splitlines())
     assert config.read_text() == epg + '# user edit\n'
-    # A privileged install is never implicitly approved by --yes.
+    # --yes alone never runs sudo; it prints the command and stops.
     calls.write_text('')
     script = f'''source {repo}/scripts/setup-ui.sh
 YES=1; NONINTERACTIVE=1; AUTO_INSTALL=0
-if confirm_sudo apt-get install -y whiptail; then exit 10; fi
-AUTO_INSTALL=1
 confirm_sudo apt-get install -y whiptail
 '''
-    subprocess.run(['bash', '-c', script], env=env, check=True, capture_output=True)
-    assert calls.read_text().count('sudo apt-get install -y whiptail') == 1
+    refused = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert refused.returncode != 0
+    assert '--auto-install' in refused.stderr and 'sudo apt-get install -y whiptail' in refused.stderr
+    assert 'apt-get' not in calls.read_text()
+    # --yes --auto-install runs sudo -n after a successful no-prompt privilege check.
+    calls.write_text('')
+    auto = script.replace('AUTO_INSTALL=0', 'AUTO_INSTALL=1')
+    subprocess.run(['bash', '-c', auto], env=env, check=True, capture_output=True)
+    assert calls.read_text().count('sudo -n apt-get install -y whiptail') == 1
+    calls.write_text('')
+    denied = subprocess.run(['bash', '-c', auto], env=dict(env, SUDO_OK='0'), capture_output=True, text=True)
+    assert denied.returncode != 0
+    assert 'sudo apt-get install -y whiptail' in denied.stderr and '上のコマンドを実行してから ./setup.sh を再実行してください' in denied.stderr
+    assert calls.read_text().strip() == 'sudo -n true'
     # Missing TUI dependency: show/install it only after approval; refusal falls back.
     dialog.rename(bin_dir / 'whiptail.hidden')
     calls.write_text('')

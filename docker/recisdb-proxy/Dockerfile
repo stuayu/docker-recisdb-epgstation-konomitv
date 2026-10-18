@@ -1,3 +1,16 @@
+FROM node:lts-bookworm-slim AS web-builder
+ARG RECISDB_REPO=https://github.com/stuayu/recisdb-proxy-rs.git
+ARG RECISDB_REF=main
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --recursive "${RECISDB_REPO}" . \
+    && git fetch --tags origin "${RECISDB_REF}" \
+    && git checkout "${RECISDB_REF}" \
+    && git submodule update --init --recursive
+WORKDIR /src/web-ui
+RUN npm ci && npm run build
+
 FROM rust:bookworm AS builder
 ARG RECISDB_REPO=https://github.com/stuayu/recisdb-proxy-rs.git
 ARG RECISDB_REF=main
@@ -8,6 +21,7 @@ RUN git clone --recursive "${RECISDB_REPO}" . \
     && git fetch --tags origin "${RECISDB_REF}" \
     && git checkout "${RECISDB_REF}" \
     && git submodule update --init --recursive
+COPY --from=web-builder /src/recisdb-proxy/static/vue /src/recisdb-proxy/static/vue
 ENV PKG_CONFIG_ALLOW_CROSS=1
 # Cargo package uses bundled libaribb25. Do not install libaribb25-dev or a shared libaribb25.so.
 RUN cargo build --release -p recisdb-proxy

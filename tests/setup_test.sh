@@ -30,6 +30,23 @@ cat > "$TMP/bin/getent" <<'EOF'
 #!/usr/bin/env bash
 [[ $1 == group && $2 == video ]] && echo 'video:x:44:'
 EOF
+cat > "$TMP/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$SYSTEMCTL_CALLS"
+if [[ $1 == is-active && $2 == --quiet ]]; then
+  case $3 in
+    pcscd.service) [[ ${PCSC_SERVICE_ACTIVE:-0} == 1 ]];;
+    pcscd.socket) [[ ${PCSC_SOCKET_ACTIVE:-0} == 1 ]];;
+    *) exit 1;;
+  esac
+fi
+EOF
+cat > "$TMP/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$SUDO_CALLS"
+if [[ $1 == -n && $2 == true ]]; then [[ ${SUDO_NONINTERACTIVE_OK:-1} == 1 ]]; exit; fi
+exit 0
+EOF
 cat > "$TMP/bin/id" <<'EOF'
 #!/usr/bin/env bash
 case $1 in -u) echo "${TEST_UID:-1000}";; -g) echo "${TEST_GID:-1000}";; esac
@@ -59,7 +76,7 @@ exit 1
 EOF
 chmod +x "$TMP/bin/"*
 export AMATSUKAZE=no EDCB=no
-export PATH="$TMP/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" DEV_DIR="$TMP/dev" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
+export PATH="$TMP/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" SYSTEMCTL_CALLS="$TMP/systemctl.calls" SUDO_CALLS="$TMP/sudo.calls" DEV_DIR="$TMP/dev" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
 python3 -u -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); print(s.getsockname()[1],flush=True); exec("while True:\n c,_=s.accept(); c.close()")' > "$TMP/server-port" &
 SERVER_PID=$!
 disown "$SERVER_PID" 2>/dev/null || true
@@ -67,7 +84,25 @@ for _ in {1..50}; do [[ -s $TMP/server-port ]] && break; sleep 0.1; done
 SERVER_PORT=$(cat "$TMP/server-port")
 [[ $SERVER_PORT =~ ^[0-9]+$ ]] || fail 'temporary relay server did not start'
 
-run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU="${1:-none}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
+run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="${RECORDED_DIR:-$TMP/recorded}" GPU="${1:-none}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
+
+# A first-time socket activation is described accurately; no interactive sudo attempt.
+if PCSC_SOCKET_ACTIVE=1 SUDO_NONINTERACTIVE_OK=0 BONCAS_MODE=local run_setup none >"$TMP/pcscd-socket" 2>&1; then
+  fail 'socket-only pcscd with unavailable noninteractive sudo should stop'
+fi
+grep -q 'pcscd.socket が有効です。リーダー接続時にホスト pcscd が起動' "$TMP/pcscd-socket" || fail 'socket-only pcscd explanation'
+grep -q 'sudo systemctl disable --now pcscd.service pcscd.socket' "$TMP/pcscd-socket" || fail 'sudo command shown'
+grep -q '上のコマンドを実行してから ./setup.sh を再実行してください' "$TMP/pcscd-socket" || fail 'noninteractive sudo recovery guidance'
+if grep -q 'systemctl disable --now' "$SUDO_CALLS"; then fail 'pcscd sudo action must not be attempted'; fi
+
+# Missing .env means there is no prior storage choice to warn about; a real later change does warn.
+mv "$ENV_FILE" "$ENV_FILE.saved"
+mkdir -p "$TMP/recorded-first" "$TMP/recorded-second"
+BONCAS_MODE=remote RECORDED_DIR="$TMP/recorded-first" run_setup none >"$TMP/storage-first"
+if grep -q '録画先の削除・対応変更' "$TMP/storage-first"; then fail 'initial storage setup emitted removal warning'; fi
+BONCAS_MODE=remote RECORDED_DIR="$TMP/recorded-second" run_setup none >"$TMP/storage-change"
+grep -q '録画先の削除・対応変更' "$TMP/storage-change" || fail 'storage change warning missing'
+mv "$ENV_FILE.saved" "$ENV_FILE"
 HTTPS=yes run_setup none >"$TMP/out"
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'default HTTPS COMPOSE_FILE'
 [[ -f $TMP/repo/config/recisdb-proxy/recisdb-proxy.toml && -f $TMP/repo/config/epgstation/config.yml && -f $TMP/repo/config/konomitv/config.yaml ]] || fail 'first run creates host config files'

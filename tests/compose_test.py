@@ -54,6 +54,8 @@ for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (Fal
     assert db['environment']['MARIADB_AUTO_UPGRADE'] == '1'
     assert not db.get('ports')
     assert services['epgstation']['depends_on']['mariadb']['condition'] == 'service_healthy'
+    capture = next(v for v in services['konomitv']['volumes'] if v['target'] == '/host-rootfs/data/konomitv-capture')
+    assert capture['source'].endswith('/data/konomitv-capture') and not capture.get('read_only', False)
     if edcb:
         assert services['edcb']['build']['args']['EDCB_REF'] == 'my-build'
         assert services['edcb']['build']['args']['EDCB_WEBUI_REF'] == 'E3'

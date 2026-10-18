@@ -5,6 +5,8 @@ TUI='' ADVANCED_PORTS=1
 truth(){ [[ $1 == yes || $1 == はい || $1 == y || $1 == Y ]]; }
 ui(){ "$TUI" --title '録画・視聴セットアップ' "$@"; }
 message(){ if [[ -n $TUI ]]; then ui --msgbox "$*" 22 76; else printf '%s\n' "$*"; fi; }
+# NONINTERACTIVE is assigned by the sourcing setup.sh.
+# shellcheck disable=SC2153
 confirm(){
   local text=$1 default=${2:-no} answer
   if [[ -n $TUI ]]; then
@@ -13,14 +15,23 @@ confirm(){
   else read -r -p "$text [y/N]: " answer; truth "$answer"; fi
 }
 confirm_sudo(){
-  local rendered
+  local rendered noninteractive=0
   printf -v rendered '%q ' sudo "$@"
+  if (( YES || NONINTERACTIVE )); then
+    noninteractive=1
+    # --yes alone never approves privileged work; --auto-install does.
+    if (( ! AUTO_INSTALL )) || ! sudo -n true >/dev/null 2>&1; then
+      if (( AUTO_INSTALL )); then printf 'sudo をパスワードなしで実行できません。実行コマンド: %s\n' "$rendered" >&2
+      else printf -- '--yes では管理者権限の操作を自動実行しません (--auto-install で許可)。実行コマンド: %s\n' "$rendered" >&2; fi
+      printf '上のコマンドを実行してから ./setup.sh を再実行してください。\n' >&2
+      exit 1
+    fi
+  fi
   printf '実行内容: %s\n' "$rendered"
-  if (( ! AUTO_INSTALL )); then
-    # --yes must never approve privileged work, including chown or service changes.
-    (( ! YES && ! NONINTERACTIVE )) || return 1
+  if (( ! AUTO_INSTALL && ! noninteractive )); then
     confirm "$rendered を実行しますか？" no || return 1
   fi
+  (( ! noninteractive )) || { sudo -n "$@"; return; }
   sudo "$@"
 }
 debian_host(){
@@ -137,7 +148,9 @@ select_storage(){
   done
   recorded=${paths[0]}
   storage_json=$(python3 -c 'import json,sys; print(json.dumps(list(dict.fromkeys(sys.argv[1:]))))' "${paths[@]}")
-  python3 "$ROOT/scripts/storage.py" warn-removed "$ROOT" "$ENV_FILE" "$recorded" "$storage_json"
+  if [[ -f $ENV_FILE ]]; then
+    python3 "$ROOT/scripts/storage.py" warn-removed "$ROOT" "$ENV_FILE" "$recorded" "$storage_json"
+  fi
 }
 run_logged(){
   local status pid

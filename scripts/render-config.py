@@ -68,6 +68,48 @@ def migrate_editable(root, env):
         migrate_amatsukaze(root / 'data/amatsukaze', root / 'config/amatsukaze')
 
 
+def migrate_konomitv(root):
+    path = root / 'config/konomitv/config.yaml'
+    if not path.is_file():
+        return
+    text = path.read_text(encoding='utf-8')
+    pattern = re.compile(r'(?ms)(^([ \t]*)upload_folders:[ \t]*\[[ \t]*\n)(.*?)(^\2[ \t]*\])')
+    match = pattern.search(text)
+    if not match:
+        return
+    lines = match.group(3).splitlines(keepends=True)
+    windows = re.compile(r"^([ \t]*)(['\"])([A-Za-z]:[\\/][^'\"]*)(['\"])([ \t]*,?[ \t]*(?:#.*)?)(\r?\n)?$")
+    changed = False
+    output = []
+    inserted = False
+    for line in lines:
+        found = windows.match(line)
+        if not found:
+            output.append(line)
+            continue
+        if not inserted:
+            output.append(f"{found.group(1)}'/data/konomitv-capture',{found.group(6) or ''}")
+            inserted = True
+        changed = True
+    if not changed:
+        return
+    replacement = match.group(1) + ''.join(output) + match.group(4)
+    migrated = text[:match.start()] + replacement + text[match.end():]
+    backup_dir = path.parent / 'backup'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = backup_dir / f'{path.name}.{stamp}'
+    counter = 1
+    while backup.exists():
+        backup = backup_dir / f'{path.name}.{stamp}-{counter}'
+        counter += 1
+    shutil.copy2(path, backup)
+    with path.open('w', encoding='utf-8') as file:
+        file.write(migrated)
+    print('移行: config/konomitv/config.yaml の Windows upload_folders を /data/konomitv-capture に置き換えました。')
+    print(f'退避: {backup.relative_to(root)}')
+
+
 AMATSUKAZE_ENCODE = """    - id: amatsukaze
       name: Amatsukaze
       cmd: '%NODE% %ROOT%/dist/AmatsukazeEncodeTool.js EPGStation'
@@ -191,6 +233,7 @@ def write_new(path, text, mode):
 
 def first_run(root, env):
     migrate_editable(root, env)
+    migrate_konomitv(root)
     for name in SERVICES:
         if not enabled(name, env):
             continue
