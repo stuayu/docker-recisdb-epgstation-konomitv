@@ -1,0 +1,10 @@
+# Include only together with compose.amatsukaze.yaml and compose.nvidia.yaml.
+services:
+  amatsukaze:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility, video]

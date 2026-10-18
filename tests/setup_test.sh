@@ -11,7 +11,7 @@ cp -R "$ROOT/." "$TMP/repo/"
 mkdir -p "$TMP/repo/konomitv"
 touch "$TMP/dev/px4video0"
 cp "$ROOT/.env.example" "$TMP/repo/.env"
-printf 'CUSTOM_KEEP=preserved\n' >> "$TMP/repo/.env"
+printf 'EPGSTATION_REF=master\nCUSTOM_KEEP=preserved\n' >> "$TMP/repo/.env"
 cat > "$TMP/repo/konomitv/Dockerfile" <<'EOF'
 FROM scratch
 EOF
@@ -22,7 +22,7 @@ case "$*" in
   'compose version'|'info'|'compose config') exit 0;;
   'info --format {{json .Runtimes}}') [[ ${NVIDIA_TOOLKIT_OK:-0} == 1 ]] && echo '{"nvidia":{}}';;
   'compose ps --format json') echo '[]';;
-  'compose ps --status running --services') printf 'recisdb-proxy\nepgstation\nkonomitv\n';;
+  'compose ps --status running --services') printf 'recisdb-proxy\nepgstation\nkonomitv\namatsukaze\n';;
   'compose logs --no-color recisdb-proxy') echo 'Web API auth token: test-token';;
 esac
 EOF
@@ -32,7 +32,7 @@ cat > "$TMP/bin/getent" <<'EOF'
 EOF
 cat > "$TMP/bin/id" <<'EOF'
 #!/usr/bin/env bash
-[[ $1 == -u ]] && echo 1000
+case $1 in -u) echo "${TEST_UID:-1000}";; -g) echo "${TEST_GID:-1000}";; esac
 EOF
 cat > "$TMP/bin/nvidia-smi" <<'EOF'
 #!/usr/bin/env bash
@@ -58,6 +58,7 @@ if [[ $1 == -brief ]]; then echo 'eno1 UP 192.168.1.30/24'; exit 0; fi
 exit 1
 EOF
 chmod +x "$TMP/bin/"*
+export AMATSUKAZE=no
 export PATH="$TMP/bin:/opt/homebrew/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" DEV_DIR="$TMP/dev" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
 python3 -u -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); print(s.getsockname()[1],flush=True); exec("while True:\n c,_=s.accept(); c.close()")' > "$TMP/server-port" &
 SERVER_PID=$!
@@ -69,6 +70,8 @@ SERVER_PORT=$(cat "$TMP/server-port")
 run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU="${1:-none}" DB="${2:-sqlite}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
 HTTPS=yes run_setup none >"$TMP/out"
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'default HTTPS COMPOSE_FILE'
+grep -q "^BONCAS_B25_PORT=$SERVER_PORT$" "$ENV_FILE" || fail 'relay port changed by WebUI port loop'
+grep -q "^BONCAS_4K_PORT=$SERVER_PORT$" "$ENV_FILE" || fail '4K relay port changed'
 grep -q '^CUSTOM_KEEP=preserved$' "$ENV_FILE" || fail 'unrelated env key not preserved'
 grep -q "$TMP/dev/px4video0:/dev/px4video0" "$TUNERS_COMPOSE_FILE" || { cat "$TUNERS_COMPOSE_FILE" >&2; fail 'tuner device generated'; }
 backup_found=0; for backup in "$ENV_FILE".bak.*; do [[ -f $backup ]] && backup_found=1; done
@@ -115,6 +118,99 @@ grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:40443:127\.0\.0\.1 .*http
 grep -Eq -- '--resolve 192-168-1-30\.local\.konomi\.tv:8443:127\.0\.0\.1 .*https://192-168-1-30\.local\.konomi\.tv:8443/' "$CURL_CALLS" || fail 'EPGStation HTTPS probe URL'
 grep -q 'KonomiTV HTTPS: https://192-168-1-30.local.konomi.tv:7000/' "$TMP/full" || fail 'KonomiTV HTTPS URL output'
 grep -q 'px4_drv を検出できません' "$TMP/full" || fail 'missing px4_drv guidance'
+
+# Exercise opt-in selection without launching a real Docker daemon.
+export DEV_DIR="$TMP/dev"
+AMATSUKAZE=yes run_setup none >"$TMP/amatsukaze.out"
+grep -q ':compose.amatsukaze.yaml$' "$ENV_FILE" || fail 'Amatsukaze enabled COMPOSE_FILE'
+grep -q '^AMATSUKAZE_WEBUI_PORT=32769$' "$ENV_FILE" || fail 'Amatsukaze WebUI port'
+grep -q '^RUN_UID=1000$' "$ENV_FILE" || fail 'shared UID'
+grep -q '^RUN_GID=1000$' "$ENV_FILE" || fail 'shared GID'
+grep -q '^EPGSTATION_REF=main$' "$ENV_FILE" || fail 'obsolete master migration'
+if grep -q '^EPGSTATION_REF=master$' "$ENV_FILE"; then fail 'duplicate obsolete master remains'; fi
+mkdir -p "$TMP/dev/dri"; touch "$TMP/dev/dri/renderD128"
+AMATSUKAZE=yes run_setup intel >"$TMP/out"
+grep -q ':compose.amatsukaze.yaml:compose.amatsukaze.intel.yaml$' "$ENV_FILE" || fail 'conditional Amatsukaze Intel override'
+rm "$TMP/dev/dri/renderD128"; rmdir "$TMP/dev/dri"
+AMATSUKAZE=yes NVIDIA_OK=1 NVIDIA_TOOLKIT_OK=1 run_setup nvidia >"$TMP/out"
+grep -q ':compose.amatsukaze.yaml:compose.amatsukaze.nvidia.yaml$' "$ENV_FILE" || fail 'conditional Amatsukaze NVIDIA override'
+AMATSUKAZE=no run_setup none >"$TMP/out"
+if grep '^COMPOSE_FILE=' "$ENV_FILE" | grep -q amatsukaze; then fail 'disabled Amatsukaze override remains'; fi
+
+# A copied example still defaults to enabled and uses the invoking user's IDs.
+awk '!/^SETUP_AMATSUKAZE=/' "$ENV_FILE" > "$ENV_FILE.next"; mv "$ENV_FILE.next" "$ENV_FILE"
+(unset AMATSUKAZE; TEST_UID=2345 TEST_GID=3456 run_setup none >"$TMP/default-amatsukaze.out")
+grep -q ':compose.amatsukaze.yaml$' "$ENV_FILE" || fail 'first-run Amatsukaze defaults yes'
+grep -q '^RUN_UID=2345$' "$ENV_FILE" || fail 'first-run UID follows caller'
+grep -q '^RUN_GID=3456$' "$ENV_FILE" || fail 'first-run GID follows caller'
+AMATSUKAZE=no run_setup none >"$TMP/out"
+(unset AMATSUKAZE; run_setup none >"$TMP/out")
+if grep '^COMPOSE_FILE=' "$ENV_FILE" | grep -q amatsukaze; then fail 'explicit no not preserved'; fi
+
+# Run the real entrypoint and real envsubst against both DB templates.
+for db in sqlite mariadb; do
+  template="$ROOT/config/config.yml.example"
+  [[ $db == sqlite ]] || template="$ROOT/config/config.mariadb.yml.example"
+  for enabled in 0 1; do
+    app="$TMP/epg-$db-$enabled"
+    mkdir -p "$app/config"
+    for name in operatorLogConfig serviceLogConfig epgUpdaterLogConfig; do touch "$app/config/$name.sample.yml"; done
+    EPGSTATION_APP_ROOT="$app" EPGSTATION_CONFIG_TEMPLATE="$template" AMATSUKAZE_ENABLED="$enabled" RUN_UID=1000 RUN_GID=1000 MARIADB_PASSWORD=test-password sh "$ROOT/docker/epgstation/entrypoint.sh" true
+    ruby -ryaml - "$app/config/config.yml" "$enabled" "$db" <<'RUBY'
+config = YAML.load_file(ARGV[0])
+enabled = ARGV[1] == '1'
+abort 'wrong database' unless config['dbtype'] == (ARGV[2] == 'sqlite' ? 'sqlite' : 'mysql')
+abort 'password not substituted' if ARGV[2] == 'mariadb' && config['mysql']['password'] != 'test-password'
+presets = config.fetch('encode')
+abort 'existing H264 preset changed' unless presets.any? { |p| p['id'] == 'h264-720p' && p['cmd'].include?('%NODE%') }
+amatsukaze = presets.select { |p| p['id'] == 'amatsukaze' }
+if enabled
+  c = config.fetch('amatsukaze')
+  abort 'connection config' unless c['host'] == 'amatsukaze' && c['port'] == 32768 && c['addTaskPath'] == '/opt/amatsukaze/AmatsukazeAddTask'
+  abort 'path/noMove config' unless c['pathMappings'] == [] && c['noMove'] == true && c['profile'] == 'EPGStation'
+  abort 'preset config' unless amatsukaze.length == 1 && amatsukaze[0]['suffix'] == '.mp4' && amatsukaze[0]['rate'] == 12.0 && amatsukaze[0]['cmd'] == '%NODE% %ROOT%/dist/AmatsukazeEncodeTool.js EPGStation'
+else
+  abort 'disabled config leaked' if config.key?('amatsukaze') || !amatsukaze.empty?
+end
+RUBY
+  done
+done
+
+# Root bootstrap delegates to the selected numeric identity and only repairs application state.
+cat > "$TMP/bin/chown" <<'EOFCHOWN'
+#!/bin/sh
+printf '%s\n' "$*" >> "$IDENTITY_CALLS"
+EOFCHOWN
+cat > "$TMP/bin/gosu" <<'EOFGOSU'
+#!/bin/sh
+printf 'gosu %s\n' "$*" >> "$IDENTITY_CALLS"
+shift
+exec "$@"
+EOFGOSU
+chmod +x "$TMP/bin/chown" "$TMP/bin/gosu"
+IDENTITY_CALLS="$TMP/identity.calls" TEST_UID=0 EPGSTATION_APP_ROOT="$TMP/epg-sqlite-1" EPGSTATION_CONFIG_TEMPLATE="$ROOT/config/config.yml.example" AMATSUKAZE_ENABLED=1 RUN_UID=1234 RUN_GID=2345 sh "$ROOT/docker/epgstation/entrypoint.sh" true
+grep -q 'gosu 1234:2345 true' "$TMP/identity.calls" || fail 'EPGStation identity drop'
+if grep -q /recorded "$TMP/identity.calls"; then fail 'recording ownership must not change'; fi
+
+# First start seeds bind mounts, later starts preserve user-edited profiles and assets.
+seed="$TMP/amatsukaze-defaults"; app="$TMP/amatsukaze-app"
+for dir in avs bat config data drcs JL logo profile input output; do mkdir -p "$seed/$dir"; done
+cp "$ROOT/docker/amatsukaze/EPGStation.profile" "$seed/profile/"
+mkdir -p "$app"
+printf '#!/bin/sh\nexec "$@"\n' > "$app/entrypoint.sh"; chmod +x "$app/entrypoint.sh"
+AMATSUKAZE_APP_ROOT="$app" AMATSUKAZE_DEFAULTS="$seed" "$ROOT/docker/amatsukaze/entrypoint.sh" true
+cmp "$seed/profile/EPGStation.profile" "$app/profile/EPGStation.profile" || fail 'first boot profile seed'
+printf 'user profile\n' > "$app/profile/EPGStation.profile"
+AMATSUKAZE_APP_ROOT="$app" AMATSUKAZE_DEFAULTS="$seed" "$ROOT/docker/amatsukaze/entrypoint.sh" true
+grep -qx 'user profile' "$app/profile/EPGStation.profile" || fail 'profile overwritten'
+python3 - "$ROOT/docker/amatsukaze/EPGStation.profile" <<'PYXML'
+import sys, xml.etree.ElementTree as ET
+p = ET.parse(sys.argv[1]).getroot()
+ns = {'p': 'http://schemas.datacontract.org/2004/07/Amatsukaze.Server'}
+for k, v in {'Name':'EPGStation', 'EncoderType':'x264', 'DisableChapter':'false', 'NoDelogo':'false', 'OutputMask':'2', 'OutputFormat':'MP4', 'EnableRename':'false', 'MoveEDCBFiles':'false'}.items():
+    assert p.find('p:' + k, ns).text == v, k
+PYXML
+echo 'PASS: Amatsukaze opt-in, GPU overrides, master migration, real entrypoint YAML (SQLite/MariaDB, enabled/disabled), profile seed/nonoverwrite'
 
 cat > "$TMP/akebi-stub" <<'EOF'
 #!/bin/sh

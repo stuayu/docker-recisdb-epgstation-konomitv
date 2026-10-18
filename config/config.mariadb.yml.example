@@ -316,6 +316,7 @@ concurrentEncodeNum: 1
 #                 (qsvencc_* / nvencc_* / vceencc_* は rigaya 氏製エンコーダを ffmpeg を介さず直接使う)
 #     最大高さ:   出力の最大高さ (省略時 720。0 で元解像度のまま)
 encode:
+${AMATSUKAZE_ENCODE}
     - id: h264-720p
       name: H.264
       cmd: '%NODE% %ROOT%/config/enc.js h264 720'
@@ -384,6 +385,8 @@ encode:
 #     pathMappings:
 #         - local: /mnt/recorded
 #           remote: '//nas/recorded'
+
+${AMATSUKAZE_CONFIG}
 
 # urlscheme:
 #     m2ts:

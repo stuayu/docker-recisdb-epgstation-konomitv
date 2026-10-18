@@ -23,7 +23,8 @@ usage() {
 非対話環境変数: BONCAS_HOST, BONCAS_PORT, BONCAS_4K_SAME,
 RECORDED_DIR, GPU (none|intel|nvidia), DB (sqlite|mariadb),
 RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, HTTPS (yes|no),
-RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE
+RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE,
+AMATSUKAZE (yes|no), AMATSUKAZE_WEBUI_PORT, RUN_UID, RUN_GID
 EOF
 }
 while (($#)); do
@@ -160,11 +161,40 @@ ask 'HTTPS 経路を有効にしますか' "${HTTPS:-$https_default}"; https=$RE
 https_enabled=0; [[ $https == yes || $https == はい || $https == y ]] && https_enabled=1
 p4=$(ask 'recisdb-proxy HTTPS ポート' "${RECISDB_HTTPS_PORT:-$(get RECISDB_HTTPS_PORT 40443)}"; printf '%s' "$REPLY")
 p5=$(ask 'EPGStation HTTPS ポート' "${EPGSTATION_HTTPS_PORT:-$(get EPGSTATION_HTTPS_PORT 8443)}"; printf '%s' "$REPLY")
-for port in "$p1" "$p2" "$p3" "$p4" "$p5"; do
+amatsukaze_default=$(get SETUP_AMATSUKAZE yes)
+[[ $existing_compose != *compose.amatsukaze.yaml* ]] || amatsukaze_default=yes
+ask 'Amatsukaze を使いますか (既定: はい)' "${AMATSUKAZE:-$amatsukaze_default}"; amatsukaze=$REPLY
+case $amatsukaze in yes|はい|y) amatsukaze_enabled=1;; no|いいえ|n) amatsukaze_enabled=0;; *) fail 'Amatsukaze の選択が不正です。' 'yes または no を指定してください。';; esac
+if ((amatsukaze_enabled)); then put SETUP_AMATSUKAZE yes; else put SETUP_AMATSUKAZE no; fi
+amatsukaze_port=${AMATSUKAZE_WEBUI_PORT:-$(get AMATSUKAZE_WEBUI_PORT 32769)}
+if ((amatsukaze_enabled)); then
+  ask 'Amatsukaze WebUI ポート' "$amatsukaze_port"; amatsukaze_port=$REPLY
+  uid_default=$(id -u); gid_default=$(id -g)
+  if [[ $(get SETUP_AMATSUKAZE '') == yes || $existing_compose == *compose.amatsukaze.yaml* ]]; then
+    uid_default=$(get RUN_UID "$uid_default"); gid_default=$(get RUN_GID "$gid_default")
+  fi
+  ask '録画・エンコードを実行する UID' "${RUN_UID:-$uid_default}"; run_uid=$REPLY
+  ask '録画・エンコードを実行する GID' "${RUN_GID:-$gid_default}"; run_gid=$REPLY
+  [[ $run_uid =~ ^[0-9]+$ && $run_gid =~ ^[0-9]+$ ]] || fail 'UID/GID が不正です。' 'id -u / id -g で確認した数値を指定してください。'
+  ((run_uid > 0 && run_gid > 0)) || fail 'UID/GID は 0 以外を指定してください。' '録画先に書ける一般ユーザーの ID を指定してください。'
+  put RUN_UID "$run_uid"; put RUN_GID "$run_gid"
+  printf '録画先 %s の所有者・権限を UID=%s GID=%s に合わせてください。既存録画の所有権は自動変更しません。\n' "$recorded" "$run_uid" "$run_gid"
+fi
+put AMATSUKAZE_WEBUI_PORT "$amatsukaze_port"
+
+relay_port=$port
+for port in "$p1" "$p2" "$p3" "$p4" "$p5" "$amatsukaze_port"; do
   if [[ ! $port =~ ^[0-9]+$ ]] || ((port<=0 || port>=65536)); then fail 'ポート番号が不正です。' '1〜65535 の数字を指定してください。'; fi
 done
 compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; [[ $db == mariadb ]] && compose+=:compose.mariadb.yaml; ((https_enabled)) && compose+=:compose.https.yaml
-put COMPOSE_FILE "$compose"; put BONCAS_B25_HOST "$host"; put BONCAS_B25_PORT "$port"; put BONCAS_4K_HOST "$fourk"; put BONCAS_4K_PORT "$fourkport"
+if ((amatsukaze_enabled)); then
+  compose+=:compose.amatsukaze.yaml
+  [[ $gpu == intel ]] && compose+=:compose.amatsukaze.intel.yaml
+  [[ $gpu == nvidia ]] && compose+=:compose.amatsukaze.nvidia.yaml
+fi
+# Correct the obsolete fork branch while preserving custom refs.
+if [[ $(get EPGSTATION_REF main) == master ]]; then put EPGSTATION_REF main; echo 'EPGSTATION_REF=master を main に更新します。'; fi
+put COMPOSE_FILE "$compose"; put BONCAS_B25_HOST "$host"; put BONCAS_B25_PORT "$relay_port"; put BONCAS_4K_HOST "$fourk"; put BONCAS_4K_PORT "$fourkport"
 put RECORDED_DIR "$recorded"; put RECISDB_WEB_PORT "$p1"; put EPGSTATION_PORT "$p2"; put KONOMITV_PORT "$p3"
 put RECISDB_HTTPS_PORT "$p4"; put EPGSTATION_HTTPS_PORT "$p5"; put AKEBI_KEYLESS_SERVER_URL "${AKEBI_KEYLESS_SERVER_URL:-$(get AKEBI_KEYLESS_SERVER_URL https://akebi.konomi.tv/)}"
 if [[ $db == mariadb ]]; then put COMPOSE_PROFILES mariadb; else put COMPOSE_PROFILES ''; fi
@@ -190,6 +220,9 @@ if [[ -s $SETTINGS_FILE ]]; then
   mv "$tmp" "$ENV_FILE"
 fi
 mkdir -p data/recisdb data/epgstation data/epgstation-logs data/epgstation-thumbnail data/epgstation-drop data/konomitv data/konomitv-logs data/mariadb
+if ((amatsukaze_enabled)); then
+  for dir in avs bat config data drcs JL logo profile input output; do mkdir -p "data/amatsukaze/$dir"; done
+fi
 DEV_DIR="$DEV_DIR" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" ./scripts/gen-tuners.sh >/dev/null || fail 'チューナー Compose を生成できません。' 'scripts/gen-tuners.sh の権限と出力先を確認してください。'
 source_path=$(get KONOMITV_SOURCE ../KonomiTV); source_path=${KONOMITV_SOURCE:-$source_path}; [[ $source_path = /* ]] || source_path="$ROOT/$source_path"
 if [[ ! -f $source_path/Dockerfile ]]; then
@@ -199,6 +232,9 @@ if [[ ! -f $source_path/Dockerfile ]]; then
 fi
 ok '.env とデータ領域を準備'
 
+if ((amatsukaze_enabled)); then
+  printf 'Amatsukaze WebUI: http://<録画ホストIP>:%s/\nEPGStation のエンコード設定に Amatsukaze を自動追加します。初回起動で EPGStation プロファイルを作成します。\nWebUI で局別ロゴを登録し、サービス設定の CM 解析無効を解除してから録画のエンコードを選択してください。\n' "$amatsukaze_port"
+fi
 if ((RECONFIGURE)); then echo '設定を更新しました。反映には make build && make up を実行してください。'; exit 0; fi
 if ((NO_BUILD)); then echo 'ビルドを省略しました。'; else
   step 'Compose 設定を検証'
@@ -217,19 +253,20 @@ deadline=$((SECONDS+180)); services_ready=0; http_ready=0
 konomi_host=${ipaddr//./-}.local.konomi.tv
 while ((SECONDS<deadline)); do
   running_services=$("$docker_cmd" compose ps --status running --services 2>/dev/null || true)
-  if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services"; then
+  if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services" && { (( ! amatsukaze_enabled )) || grep -qx amatsukaze <<<"$running_services"; }; then
     services_ready=1
     if command -v curl >/dev/null 2>&1; then
       if curl -fsS --max-time 3 "http://127.0.0.1:$p1/mirakurun/api/status" >/dev/null 2>&1 && curl -fsS --max-time 3 "http://127.0.0.1:$p2/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p3:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p3/" >/dev/null 2>&1; then
-        if (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; then http_ready=1; break; fi
+        if { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
       fi
     else printf 'curl がないため HTTP 応答確認を省略します。必要なら curl を導入して再確認してください。\n'; http_ready=1; break; fi
   fi
   sleep 3
 done
-if ((services_ready && http_ready)); then ok 'recisdb-proxy、EPGStation、KonomiTV の起動と HTTP 応答を確認'; else echo 'サービス起動または HTTP 応答がタイムアウトしました。docker compose ps / logs を確認してください。'; fi
+if ((services_ready && http_ready)); then ok '選択したサービスの起動と HTTP 応答を確認'; else echo 'サービス起動または HTTP 応答がタイムアウトしました。docker compose ps / logs を確認してください。'; fi
 step 'アクセス先と次の作業'
 printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
+if ((amatsukaze_enabled)); then printf 'Amatsukaze WebUI: http://%s:%s/\n' "$ipaddr" "$amatsukaze_port"; fi
 if ((https_enabled)); then printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStation HTTPS: https://%s:%s/\n' "$konomi_host" "$p4" "$konomi_host" "$p5"; fi
 printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n'
 token=$("$docker_cmd" compose logs --no-color recisdb-proxy 2>/dev/null | sed -n 's/.*Web API auth token: *//p' | tail -n1 || true)

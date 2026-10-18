@@ -1,3 +1,4 @@
+# Amatsukaze 有効時は compose.amatsukaze.nvidia.yaml も追加する。setup.sh が自動選択。
 services:
   konomitv:
     deploy:
