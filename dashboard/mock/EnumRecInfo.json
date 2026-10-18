@@ -1,0 +1,62 @@
+[
+  {
+    "id": 100,
+    "title": "小さな旅 秋の山里を歩く",
+    "serviceName": "NHK 総合",
+    "startTime": "2026-10-18T19:30:00+09:00",
+    "durationSecond": 1800,
+    "recStatus": 0,
+    "drops": 0,
+    "scrambles": 0
+  },
+  {
+    "id": 101,
+    "title": "サイエンスフロンティア 宇宙の地図",
+    "serviceName": "NHK 総合",
+    "startTime": "2026-10-18T16:30:00+09:00",
+    "durationSecond": 2100,
+    "recStatus": 0,
+    "drops": 0,
+    "scrambles": 0
+  },
+  {
+    "id": 102,
+    "title": "土曜ドラマ「帰り道」 第3話",
+    "serviceName": "NHK BS",
+    "startTime": "2026-10-18T13:30:00+09:00",
+    "durationSecond": 2400,
+    "recStatus": 0,
+    "drops": 0,
+    "scrambles": 0
+  },
+  {
+    "id": 103,
+    "title": "ニュース 7",
+    "serviceName": "BSシネマ",
+    "startTime": "2026-10-18T10:30:00+09:00",
+    "durationSecond": 2700,
+    "recStatus": 0,
+    "drops": 0,
+    "scrambles": 0
+  },
+  {
+    "id": 104,
+    "title": "自然紀行 四季の森を訪ねて",
+    "serviceName": "テレビ東京",
+    "startTime": "2026-10-18T07:30:00+09:00",
+    "durationSecond": 3000,
+    "recStatus": 0,
+    "drops": 0,
+    "scrambles": 0
+  },
+  {
+    "id": 105,
+    "title": "クラシック音楽館",
+    "serviceName": "NHK Eテレ",
+    "startTime": "2026-10-18T04:30:00+09:00",
+    "durationSecond": 3300,
+    "recStatus": 0,
+    "drops": 0,
+    "scrambles": 0
+  }
+]

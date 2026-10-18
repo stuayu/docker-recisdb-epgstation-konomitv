@@ -27,6 +27,6 @@ for file, label, scheme, endpoint_host, key, port, path in [
     if file in files:
         urls.append((label, f'{scheme}://{endpoint_host}:{values.get(key, port)}{path}'))
 if 'compose.boncasrelay.yaml' in files:
-    urls.append(('BonCasRelay WebUI (録画ホスト上)', 'http://127.0.0.1:6980/'))
+    urls.append(('BonCasRelay WebUI (録画ホスト上)', 'http://127.0.0.1:' + values.get('BONCASRELAY_WEB_PORT', '6980') + '/'))
 for label, url in urls:
     print(f'{label}: {url}')

@@ -18,6 +18,7 @@ import sys
 import json
 from storage import directories, targets, mounts
 from editable import migrate_edcb, migrate_amatsukaze
+from dashboard import generate as generate_dashboard
 
 SERVICES = {
     'recisdb-proxy': {
@@ -290,6 +291,8 @@ def first_run(root, env):
                 migrate_recisdb_auth(root, out)
             check_amatsukaze_section(name, out, env)
 
+    generate_dashboard(root, env)
+
 
 def regen(root, env, name, assume_yes, spec=None):
     spec = SERVICES[name] if spec is None else spec
@@ -348,6 +351,8 @@ def main():
         first_run(root, env)
         mounts(root, env)
     else:
+        if args.service == 'edcb':
+            generate_dashboard(root, env)
         for spec in specs(args.service):
             regen(root, env, args.service, args.yes, spec)
 

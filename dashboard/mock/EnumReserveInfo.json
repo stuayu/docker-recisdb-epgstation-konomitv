@@ -1,0 +1,170 @@
+[
+  {
+    "reserveID": 1,
+    "title": "日曜特集 日本の鉄道、その先へ",
+    "startTime": "2026-10-18T21:30:00+09:00",
+    "durationSecond": 3600,
+    "stationName": "NHK 総合",
+    "onid": 32736,
+    "tsid": 32736,
+    "sid": 1024,
+    "eid": 100,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 2,
+    "title": "ニュース・気象情報",
+    "startTime": "2026-10-18T22:00:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "NHK 総合",
+    "onid": 32736,
+    "tsid": 32737,
+    "sid": 1025,
+    "eid": 101,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 3,
+    "title": "世界の街角から — 暮らしをつなぐ小さな風景",
+    "startTime": "2026-10-18T22:30:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "NHK BS",
+    "onid": 32736,
+    "tsid": 32738,
+    "sid": 1026,
+    "eid": 102,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 4,
+    "title": "日曜映画劇場「星をめぐる旅」",
+    "startTime": "2026-10-18T23:00:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "BSシネマ",
+    "onid": 32736,
+    "tsid": 32739,
+    "sid": 1027,
+    "eid": 103,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 5,
+    "title": "スポーツダイジェスト",
+    "startTime": "2026-10-18T23:30:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "テレビ東京",
+    "onid": 32736,
+    "tsid": 32740,
+    "sid": 1028,
+    "eid": 104,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 6,
+    "title": "深夜の音楽室 セッション 2026",
+    "startTime": "2026-10-19T00:00:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "NHK Eテレ",
+    "onid": 32736,
+    "tsid": 32741,
+    "sid": 1029,
+    "eid": 105,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 7,
+    "title": "ドキュメント 海辺の記憶",
+    "startTime": "2026-10-19T00:30:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "日本テレビ",
+    "onid": 32736,
+    "tsid": 32742,
+    "sid": 1030,
+    "eid": 106,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  },
+  {
+    "reserveID": 8,
+    "title": "明日の空と天気",
+    "startTime": "2026-10-19T01:00:00+09:00",
+    "durationSecond": 1800,
+    "stationName": "NHK 総合",
+    "onid": 32736,
+    "tsid": 32743,
+    "sid": 1031,
+    "eid": 107,
+    "overlapMode": 0,
+    "comment": "",
+    "recSetting": {
+      "recMode": 1,
+      "recEnabled": true,
+      "priority": 2,
+      "startMargin": 0,
+      "endMargin": 0,
+      "tunerID": 0
+    }
+  }
+]

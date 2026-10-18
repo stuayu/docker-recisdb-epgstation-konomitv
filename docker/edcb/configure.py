@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from http_public import update_mime
 stack_root = Path(os.environ.get("EDCB_STACK_ROOT", str(Path(__file__).resolve().parents[2])))
 sys.path.insert(0, str(stack_root / "scripts"))
 from editable import migrate_edcb, edcb_editable, backup
@@ -55,6 +56,16 @@ for src in web_defaults.rglob('*') if web_defaults.is_dir() else []:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 (root / 'Setting').mkdir(exist_ok=True)
+
+# dashboard.json is derived on the host, outside the image's refreshed WebUI tree.
+public = root / 'HttpPublic'
+public.mkdir(exist_ok=True)
+dashboard_link = public / 'dashboard.json'
+if dashboard_link.is_symlink() or dashboard_link.exists():
+    dashboard_link.unlink()
+dashboard_link.symlink_to('../dashboard.json')
+# Existing volumes may still contain the old CivetWeb font MIME names.
+update_mime(root / 'ContentTypeText.txt')
 
 recording_paths = [p + '/edcb' for p in targets(os.environ)]
 if 'EDCB_RECORDED' in os.environ and 'RECORDED_DIRS_JSON' not in os.environ:

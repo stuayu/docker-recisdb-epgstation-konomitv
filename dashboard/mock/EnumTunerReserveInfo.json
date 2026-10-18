@@ -1,0 +1,63 @@
+[
+  {
+    "tunerID": 65537,
+    "tunerName": "BonDriver_LinuxMirakc.so / 01",
+    "reserveList": [
+      1
+    ]
+  },
+  {
+    "tunerID": 65538,
+    "tunerName": "BonDriver_LinuxMirakc.so / 02",
+    "reserveList": [
+      2
+    ]
+  },
+  {
+    "tunerID": 65539,
+    "tunerName": "BonDriver_LinuxMirakc.so / 03",
+    "reserveList": [
+      3
+    ]
+  },
+  {
+    "tunerID": 65540,
+    "tunerName": "BonDriver_LinuxMirakc.so / 04",
+    "reserveList": [
+      4
+    ]
+  },
+  {
+    "tunerID": 65541,
+    "tunerName": "BonDriver_LinuxMirakc.so / 05",
+    "reserveList": [
+      5
+    ]
+  },
+  {
+    "tunerID": 65542,
+    "tunerName": "BonDriver_LinuxMirakc.so / 06",
+    "reserveList": [
+      6
+    ]
+  },
+  {
+    "tunerID": 65543,
+    "tunerName": "BonDriver_LinuxMirakc.so / 07",
+    "reserveList": [
+      7
+    ]
+  },
+  {
+    "tunerID": 65544,
+    "tunerName": "BonDriver_LinuxMirakc.so / 08",
+    "reserveList": [
+      8
+    ]
+  },
+  {
+    "tunerID": 4294967295,
+    "tunerName": "チューナー不足",
+    "reserveList": []
+  }
+]

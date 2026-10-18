@@ -28,7 +28,8 @@ RECORDED_DIR, GPU (none|intel|nvidia),
 RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, HTTPS (yes|no),
 RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE,
 AMATSUKAZE (yes|no), AMATSUKAZE_WEBUI_PORT, RUN_UID, RUN_GID,
-EDCB (yes|no), EDCB_WEB_PORT, EDCB_HTTPS_PORT, EDCB_TUNER_COUNT
+EDCB (yes|no), EDCB_WEB_PORT, EDCB_HTTPS_PORT, EDCB_TUNER_COUNT,
+DASHBOARD_TITLE, BONCASRELAY_WEB_PORT
 EOF
 }
 while (($#)); do
@@ -251,6 +252,9 @@ if ((upload_enabled)) && [[ $(get EDCB_EPGSTATION_ENABLED 0) != 1 ]]; then
   message 'EDCB 自動登録の有効化には再ビルドが必要です。make build または docker compose build edcb を実行してください。'
 fi
 put BONCAS_MODE "$boncas_mode"
+boncas_web_port=${BONCASRELAY_WEB_PORT:-$(get BONCASRELAY_WEB_PORT 6980)}
+put BONCASRELAY_WEB_PORT "$boncas_web_port"
+put DASHBOARD_TITLE "${DASHBOARD_TITLE:-$(get DASHBOARD_TITLE 録画サーバー)}"
 put RECORDED_DIRS_JSON "$storage_json"
 capture_dir=${CAPTURE_DIR:-$(get CAPTURE_DIR ./data/konomitv-capture)}
 [[ -n $capture_dir && $capture_dir != *'$'* && $capture_dir != *$'\n'* && $capture_dir != *$'\r'* ]] || fail 'キャプチャ保存先が不正です。' 'CAPTURE_DIR に改行と $ を含まないパスを指定してください。'
@@ -272,7 +276,7 @@ fi
 put AMATSUKAZE_WEBUI_PORT "$amatsukaze_port"
 
 relay_port=$port
-for port in "$p1" "$p2" "$p3" "$p4" "$p5" "$amatsukaze_port" "$edcb_port" "$edcb_https_port"; do
+for port in "$p1" "$p2" "$p3" "$p4" "$p5" "$amatsukaze_port" "$edcb_port" "$edcb_https_port" "$boncas_web_port"; do
   if [[ ! $port =~ ^[0-9]+$ ]] || ((port<=0 || port>=65536)); then fail 'ポート番号が不正です。' '1〜65535 の数字を指定してください。'; fi
 done
 compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; ((https_enabled)) && compose+=:compose.https.yaml
@@ -362,36 +366,43 @@ if [[ ! -f $source_path/Dockerfile ]]; then
   git clone https://github.com/stuayu/KonomiTV.git "$source_path" || fail 'KonomiTV の clone に失敗しました。' 'ネットワークと保存先の権限を確認してください。'
 fi
 # Create service config only when missing; existing files (user edits) are kept.
-python3 "$ROOT/scripts/render-config.py" --root "$ROOT" --env "$ENV_FILE" first-run || fail '設定ファイルを生成できません。' 'scripts/render-config.py の出力と config/ の権限を確認してください。'
+ipaddr=$(python3 "$ROOT/scripts/dashboard.py")
+konomi_host=${ipaddr//./-}.local.konomi.tv
+dashboard_urls=''
+if ((edcb_enabled)); then
+  dashboard_urls="ダッシュボード HTTP: http://$ipaddr:$edcb_port/"$'\n'
+  if ((https_enabled)); then dashboard_urls+="ダッシュボード HTTPS: https://$konomi_host:$edcb_https_port/"$'\n'; fi
+fi
+DASHBOARD_HOST="$ipaddr" python3 "$ROOT/scripts/render-config.py" --root "$ROOT" --env "$ENV_FILE" first-run || fail '設定ファイルを生成できません。' 'scripts/render-config.py の出力と config/ の権限を確認してください。'
 ok '.env・設定ファイル・データ領域を準備'
 message '既存の設定ファイルは維持しました。録画先や Relay を変更した場合は make regen-config SERVICE=epgstation / konomitv / edcb / recisdb-proxy で差分を確認して反映してください。録画先の削除・順序変更は既存録画 DB のパスに影響します。旧マウントを削除する前に確認してください。' 
 
 if ((amatsukaze_enabled)); then
   printf 'Amatsukaze WebUI: http://<録画ホストIP>:%s/\nEPGStation のエンコード設定に Amatsukaze を自動追加します。初回起動で EPGStation プロファイルを作成します。\nWebUI で局別ロゴを登録し、サービス設定の CM 解析無効を解除してから録画のエンコードを選択してください。\n' "$amatsukaze_port"
 fi
-if ((RECONFIGURE)); then message '設定を更新しました。反映には make build && make up を実行してください。既存設定の再生成が必要な場合は上記案内も確認してください。'; exit 0; fi
+if ((RECONFIGURE)); then message "${dashboard_urls}設定を更新しました。反映には make build && make up を実行してください。既存設定の再生成が必要な場合は上記案内も確認してください。"; exit 0; fi
 if ((NO_BUILD)); then echo 'ビルドを省略しました。'; else
   step 'Compose 設定を検証'
   "$docker_cmd" compose config >/dev/null || fail 'docker compose config が失敗しました。' '.env、Compose ファイル、KonomiTV_SOURCE を確認してください。'
   step 'Docker イメージをビルド (数分以上かかる場合があります)'
   run_logged build "$docker_cmd" compose build || fail 'Docker イメージのビルドに失敗しました。' 'ログの最初のエラー、空き容量、ネットワークを確認してください。'
 fi
-if ((NO_START)); then message "設定完了。起動を省略しました。make build && make up && make scan で受信設定まで進めます。\nrecisdb-proxy http://<IP>:$p1/ / EPGStation http://<IP>:$p2/\nKonomiTV https://<IPをハイフン区切り>.local.konomi.tv:$p3/\nEDCB 有効時 http://<IP>:$edcb_port/E3/ / Amatsukaze 有効時 http://<IP>:$amatsukaze_port/\n次に予約録画・再生を確認してください。"; exit 0; fi
+if ((NO_START)); then message "設定完了。起動を省略しました。make build && make up && make scan で受信設定まで進めます。
+${dashboard_urls}recisdb-proxy http://$ipaddr:$p1/ / EPGStation http://$ipaddr:$p2/
+KonomiTV https://$konomi_host:$p3/
+EDCB 有効時 http://$ipaddr:$edcb_port/E3/ / Amatsukaze 有効時 http://$ipaddr:$amatsukaze_port/
+次に予約録画・再生を確認してください。"; exit 0; fi
 step 'コンテナを起動'
 run_logged start "$docker_cmd" compose up -d || fail 'コンテナ起動に失敗しました。' 'docker compose logs と docker compose ps で原因を確認してください。'
 step 'サービスの起動を待機'
-ipaddr=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
-[[ -n $ipaddr ]] || ipaddr=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
-[[ -n $ipaddr ]] || ipaddr=localhost
 deadline=$((SECONDS+180)); services_ready=0; http_ready=0
-konomi_host=${ipaddr//./-}.local.konomi.tv
 while ((SECONDS<deadline)); do
   running_services=$("$docker_cmd" compose ps --status running --services 2>/dev/null || true)
   if grep -qx recisdb-proxy <<<"$running_services" && grep -qx epgstation <<<"$running_services" && grep -qx konomitv <<<"$running_services" && { (( ! amatsukaze_enabled )) || grep -qx amatsukaze <<<"$running_services"; } && { (( ! edcb_enabled )) || grep -qx edcb <<<"$running_services"; } && { [[ $boncas_mode != local ]] || grep -qx boncasrelay <<<"$running_services"; }; then
     services_ready=1
     if command -v curl >/dev/null 2>&1; then
       if curl -fsS --max-time 3 "http://127.0.0.1:$p1/mirakurun/api/status" >/dev/null 2>&1 && curl -fsS --max-time 3 "http://127.0.0.1:$p2/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p3:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p3/" >/dev/null 2>&1; then
-        if { [[ $boncas_mode != local ]] || curl -fsS --max-time 3 http://127.0.0.1:6980/ >/dev/null 2>&1; } && { (( ! edcb_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$edcb_port/" >/dev/null 2>&1; } && { (( ! edcb_enabled || ! https_enabled )) || curl --resolve "$konomi_host:$edcb_https_port:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$edcb_https_port/" >/dev/null 2>&1; } && { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
+        if { [[ $boncas_mode != local ]] || curl -fsS --max-time 3 "http://127.0.0.1:$boncas_web_port/" >/dev/null 2>&1; } && { (( ! edcb_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$edcb_port/" >/dev/null 2>&1; } && { (( ! edcb_enabled || ! https_enabled )) || curl --resolve "$konomi_host:$edcb_https_port:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$edcb_https_port/" >/dev/null 2>&1; } && { (( ! amatsukaze_enabled )) || curl -fsS --max-time 3 "http://127.0.0.1:$amatsukaze_port/" >/dev/null 2>&1; } && { (( ! https_enabled )) || { curl --resolve "$konomi_host:$p4:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p4/" >/dev/null 2>&1 && curl --resolve "$konomi_host:$p5:127.0.0.1" -fsS --max-time 3 "https://$konomi_host:$p5/" >/dev/null 2>&1; }; }; then http_ready=1; break; fi
       fi
     else printf 'curl がないため HTTP 応答確認を省略します。必要なら curl を導入して再確認してください。\n'; http_ready=1; break; fi
   fi
@@ -408,6 +419,7 @@ else
   ENV_FILE="$ENV_FILE" TUNERS_COMPOSE_FILE="$COMPOSE_TUNERS" DOCKER_BIN="$docker_cmd" python3 "$ROOT/scripts/tuner-setup.py" "${scan_args[@]}" || message '受信設定が未完了です。アンテナ・ドライバー・権限を確認し、make scan で再試行してください。セットアップは続行します。'
 fi
 step 'アクセス先と次の作業'
+printf '%s' "$dashboard_urls"
 printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"
 if ((amatsukaze_enabled)); then printf 'Amatsukaze WebUI: http://%s:%s/\n' "$ipaddr" "$amatsukaze_port"; fi
 if ((https_enabled)); then printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStation HTTPS: https://%s:%s/\n' "$konomi_host" "$p4" "$konomi_host" "$p5"; fi
@@ -416,10 +428,11 @@ if ((edcb_enabled)); then
   if ((https_enabled)); then printf 'EDCB HTTPS: https://%s:%s/E3/\n' "$konomi_host" "$edcb_https_port"; fi
   echo 'EDCB の ChSet はスキャン成功後に自動反映します。再取得のみ: make edcb-chset (録画がないとき)。'
 fi
-printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n'
+printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:%s/\n' "$boncas_web_port"
 printf '次にやること:\n1. EPG 取得を待ち、EPGStation / EDCB で番組表と予約を確認。\n2. KonomiTV で初期設定し、ライブ視聴を確認。\n3. 受信設定の警告があれば make scan。デバイス変更時は make tuners && make scan。\n'
 
-message "セットアップ完了。recisdb-proxy http://$ipaddr:$p1/ / EPGStation http://$ipaddr:$p2/ / KonomiTV https://$konomi_host:$p3/
+message "セットアップ完了。
+${dashboard_urls}recisdb-proxy http://$ipaddr:$p1/ / EPGStation http://$ipaddr:$p2/ / KonomiTV https://$konomi_host:$p3/
 EDCB 有効時 http://$ipaddr:$edcb_port/E3/ / Amatsukaze 有効時 http://$ipaddr:$amatsukaze_port/
-BonCasRelay Web UI はカードホストの http://127.0.0.1:6980/
+BonCasRelay Web UI はカードホストの http://127.0.0.1:$boncas_web_port/
 予約録画・再生を確認してください。受信設定の警告があれば make scan で再試行してください。"

@@ -1,0 +1,55 @@
+{
+  "title": "録画サーバー",
+  "host": "192.168.3.50",
+  "httpsHost": "192-168-3-50.local.konomi.tv",
+  "services": [
+    {
+      "id": "epgstation",
+      "name": "EPGStation",
+      "role": "録画予約・録画一覧・視聴",
+      "http": 8888,
+      "https": 8443,
+      "path": "/"
+    },
+    {
+      "id": "konomitv",
+      "name": "KonomiTV",
+      "role": "ライブ視聴・録画再生",
+      "https": 7000,
+      "path": "/"
+    },
+    {
+      "id": "edcb",
+      "name": "EDCB",
+      "role": "番組表・録画予約 (EMWUI)",
+      "http": 5510,
+      "https": 8553,
+      "path": "/E3/"
+    },
+    {
+      "id": "recisdb",
+      "name": "recisdb-proxy",
+      "role": "チューナー・チャンネル管理",
+      "http": 40080,
+      "https": 40443,
+      "path": "/"
+    },
+    {
+      "id": "amatsukaze",
+      "name": "Amatsukaze",
+      "role": "CM カット・エンコード",
+      "http": 32769,
+      "path": "/"
+    },
+    {
+      "id": "boncasrelay",
+      "name": "BonCasRelay",
+      "role": "B-CAS カードリーダー中継",
+      "local": "http://127.0.0.1:6980/",
+      "note": "カードを挿したマシン上でのみ開けます"
+    }
+  ],
+  "edcb": {
+    "api": true
+  }
+}

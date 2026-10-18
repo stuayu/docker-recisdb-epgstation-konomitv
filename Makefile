@@ -25,6 +25,7 @@ test:
 	python3 tests/config_test.py
 	python3 tests/review_test.py
 	python3 tests/tuner_setup_test.py
+	python3 tests/dashboard_test.py
 
 config:
 	./setup.sh --reconfigure

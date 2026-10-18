@@ -1,0 +1,10 @@
+.git
+.env
+data/
+config/
+backup/
+**/__pycache__/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.npm-cache/
+dashboard/qa-output/

@@ -1,0 +1,14 @@
+[
+  {
+    "onid": 32736,
+    "tsid": 32736,
+    "sid": 1024,
+    "service_type": 1,
+    "partialReceptionFlag": 0,
+    "service_provider_name": "",
+    "service_name": "NHK 総合",
+    "network_name": "地上デジタル",
+    "ts_name": "NHK",
+    "remote_control_key_id": 1
+  }
+]

@@ -266,14 +266,19 @@ HTTP 直通は従来どおり使えます。HTTPS 経路を有効にすると、
 
 | システム | HTTP | HTTPS |
 | --- | --- | --- |
+| ダッシュボード (EDCB 有効時) | `http://<IP>:5510/` | `https://<IPをハイフン区切り>.local.konomi.tv:8553/` |
 | recisdb-proxy | `http://<録画ホストIP>:40080/` | `https://<IPをハイフン区切り>.local.konomi.tv:40443/` |
 | EPGStation | `http://<録画ホストIP>:8888/` | `https://<IPをハイフン区切り>.local.konomi.tv:8443/` |
-| EDCB (任意) | `http://<録画ホストIP>:5510/E3/` | `https://<IPをハイフン区切り>.local.konomi.tv:8553/E3/` |
+| EDCB WebUI / EMWUI (任意) | `http://<録画ホストIP>:5510/E3/` | `https://<IPをハイフン区切り>.local.konomi.tv:8553/E3/` |
 | MariaDB | Compose 内 `mariadb:3306` のみ | 対象外 |
 | Amatsukaze (任意) | `http://<録画ホストIP>:32769/` | 対象外 |
 | KonomiTV | 対象外 | `https://<IPをハイフン区切り>.local.konomi.tv:7000/` |
 
 ポート番号で転送先を切り替えます。KonomiTV は内蔵 Akebi を使い、HTTP 直通は対象外です。本体 Uvicorn がコンテナ内 `127.0.0.77` だけで待ち受け、HTTP 直通にはフォーク改造が必要です。
+
+EDCB の `/` と `/index.html` はダッシュボード、`/E3/` は EMWUI、`/legacy/` は従来の WebUI です。HTTP サーバー標準トップは `/legacy/` メニューのリンクから `/server.html` で開けます。
+表示名は `.env` の `DASHBOARD_TITLE` (既定 `録画サーバー`) で変更できます。サービス一覧・ポート・LAN IP は setup、`make update`、`make regen-config SERVICE=edcb` で `data/edcb/dashboard.json` に再生成します。この JSON は派生データなので直接編集せず、`.env` を変更してください。起動時に `HttpPublic/dashboard.json` からリンクし、再生成後はページの再読み込みで反映します。
+HTTPS 経路を無効にした場合、ダッシュボードには HTTPS リンクを生成せず、HTTPS 専用の KonomiTV は一覧から除外します。KonomiTV 自体の内蔵 Akebi は引き続き起動します。同梱 BonCasRelay の Web ポートは `BONCASRELAY_WEB_PORT` (既定 6980) で変更でき、録画ホストのループバックにだけ公開します。
 
 HTTPS gateway は `.env` の `COMPOSE_FILE` に `compose.https.yaml` が含まれる場合だけ起動します。setup.sh の既定は有効です。Akebi は SNI の `*.local.konomi.tv` に対する証明書を Keyless Server から取得し、TLS 終端後に内部 HTTP へ転送します。HTTP から HTTPS への自動リダイレクトはありません。
 

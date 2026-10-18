@@ -1,4 +1,11 @@
 ARG EDCB_EPGSTATION_ENABLED=0
+FROM node:24-bookworm-slim AS dashboard-builder
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/package-lock.json dashboard/.npmrc ./
+RUN npm ci
+COPY dashboard/ ./
+RUN npm run typecheck && npm test && npm run build
+
 FROM rust:bookworm AS uploader-1
 ARG EDCB_TO_EPGSTATION_REPO=https://github.com/stuayu/EDCB-to-EPGStation.git
 ARG EDCB_TO_EPGSTATION_REF=main
@@ -42,6 +49,9 @@ RUN git clone "$EDCB_BONDRIVER_REPO" bondriver && cd bondriver \
     && git submodule update --init --recursive \
     && python3 /tmp/patch-driver.py . && make -j"$(nproc)" \
     && install -m 755 BonDriver_LinuxMirakc.so /usr/local/lib/edcb/
+COPY --from=dashboard-builder /dashboard/dist/ /tmp/dashboard-dist/
+COPY docker/edcb/http_public.py docker/edcb/dashboard-index.lua /tmp/dashboard-install/
+RUN python3 /tmp/dashboard-install/http_public.py /tmp/dashboard-dist /var/local/edcb
 
 FROM debian:bookworm-slim
 ENV TZ=Asia/Tokyo LANG=C.UTF-8 EDCB_STACK_ROOT=/opt
@@ -53,8 +63,8 @@ COPY --from=builder /usr/local/bin/ /usr/local/bin/
 COPY --from=builder /usr/local/lib/edcb/ /usr/local/lib/edcb/
 COPY --from=builder /var/local/edcb/ /opt/edcb-defaults/
 COPY docker/edcb/entrypoint.sh /usr/local/bin/edcb-entrypoint.sh
-COPY docker/edcb/configure.py docker/edcb/chset.py docker/edcb/post-record.py docker/edcb/post-record.sh /opt/edcb-stack/
-COPY scripts/editable.py scripts/storage.py scripts/render-config.py /opt/scripts/
+COPY docker/edcb/configure.py docker/edcb/chset.py docker/edcb/post-record.py docker/edcb/post-record.sh docker/edcb/http_public.py /opt/edcb-stack/
+COPY scripts/editable.py scripts/storage.py scripts/render-config.py scripts/dashboard.py /opt/scripts/
 COPY templates/edcb/ /opt/templates/edcb/
 COPY docker/edcb/upload_runtime.py /opt/edcb-stack/
 COPY --from=uploader /out/ /opt/edcb-upload/
