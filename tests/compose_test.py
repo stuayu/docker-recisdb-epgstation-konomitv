@@ -41,7 +41,7 @@ for edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, Tru
     assert services['epgstation']['depends_on']['mariadb']['condition'] == 'service_healthy'
     if edcb:
         assert services['edcb']['build']['args']['EDCB_REF'] == 'my-build'
-        assert services['edcb']['build']['args']['EDCB_WEBUI_REF'] == 'dev'
+        assert services['edcb']['build']['args']['EDCB_WEBUI_REF'] == 'E3'
         assert any(v['target'] == '/recorded' for v in services['edcb']['volumes'])
         assert services['edcb']['stop_grace_period'] == '50s'
     if https:

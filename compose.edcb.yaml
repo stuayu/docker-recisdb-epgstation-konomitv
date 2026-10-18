@@ -6,8 +6,8 @@ services:
       args:
         EDCB_REPO: ${EDCB_REPO:-https://github.com/stuayu/EDCB.git}
         EDCB_REF: ${EDCB_REF:-my-build}
-        EDCB_WEBUI_REPO: ${EDCB_WEBUI_REPO:-https://github.com/stuayu/EDCB_Material_WebUI.git}
-        EDCB_WEBUI_REF: ${EDCB_WEBUI_REF:-dev}
+        EDCB_WEBUI_REPO: ${EDCB_WEBUI_REPO:-https://github.com/EMWUI/EDCB_Material_WebUI.git}
+        EDCB_WEBUI_REF: ${EDCB_WEBUI_REF:-E3}
         EDCB_BONDRIVER_REPO: ${EDCB_BONDRIVER_REPO:-https://github.com/matching/BonDriver_LinuxMirakc.git}
         EDCB_BONDRIVER_REF: ${EDCB_BONDRIVER_REF:-main}
     restart: unless-stopped

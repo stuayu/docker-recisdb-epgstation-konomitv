@@ -17,6 +17,16 @@ for src in defaults.rglob('*'):
         dst.mkdir(exist_ok=True)
     elif not dst.exists():
         shutil.copy2(src, dst)
+# WebUI code is not user configuration: refresh it from the image on every start.
+# Settings under Setting/ are seeded above and never overwritten.
+web_defaults = defaults / 'HttpPublic'
+for src in web_defaults.rglob('*') if web_defaults.is_dir() else []:
+    dst = root / 'HttpPublic' / src.relative_to(web_defaults)
+    if src.is_dir():
+        dst.mkdir(parents=True, exist_ok=True)
+    else:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 (root / 'Setting').mkdir(exist_ok=True)
 
 def seed(name, body):
@@ -36,6 +46,8 @@ EnableHttpSrv=1
 HttpPort=5510
 HttpPublicFolder={root}/HttpPublic
 HttpAccessControlList=+127.0.0.1,+10.0.0.0/8,+172.16.0.0/12,+192.168.0.0/16
+# Material WebUI (E3) keeps one Civetweb thread per SSE view; the default 5 stalls tabs.
+HttpNumThreads=50
 EnableTCPSrv=0
 RecEndMode=0
 [BonDriver_LinuxMirakc.so]

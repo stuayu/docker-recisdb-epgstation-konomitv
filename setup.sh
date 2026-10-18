@@ -181,7 +181,8 @@ if ((edcb_enabled)); then
   [[ $edcb_count =~ ^[1-9][0-9]?$ ]] || fail 'チューナー数が不正です。' '1〜99 を指定してください。'
 fi
 put EDCB_WEB_PORT "$edcb_port"; put EDCB_HTTPS_PORT "$edcb_https_port"; put EDCB_TUNER_COUNT "$edcb_count"
-if ((amatsukaze_enabled || edcb_enabled)); then
+# recisdb-proxy always runs as RUN_UID/RUN_GID so it can write data/ and config/ owned by the host user.
+if true; then
   uid_default=$(id -u); gid_default=$(id -g)
   if [[ $(get SETUP_AMATSUKAZE '') == yes || $(get SETUP_EDCB '') == yes || $existing_compose == *compose.amatsukaze.yaml* || $existing_compose == *compose.edcb.yaml* ]]; then
     uid_default=$(get RUN_UID "$uid_default"); gid_default=$(get RUN_GID "$gid_default")
@@ -265,7 +266,9 @@ if [[ ! -f $source_path/Dockerfile ]]; then
   [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail 'KonomiTV ソースが必要です。' 'KONOMITV_SOURCE に Dockerfile を含むフォークのパスを指定してください。'
   git clone https://github.com/stuayu/KonomiTV.git "$source_path" || fail 'KonomiTV の clone に失敗しました。' 'ネットワークと保存先の権限を確認してください。'
 fi
-ok '.env とデータ領域を準備'
+# Create service config only when missing; existing files (user edits) are kept.
+python3 "$ROOT/scripts/render-config.py" --root "$ROOT" --env "$ENV_FILE" first-run || fail '設定ファイルを生成できません。' 'scripts/render-config.py の出力と config/ の権限を確認してください。'
+ok '.env・設定ファイル・データ領域を準備'
 
 if ((amatsukaze_enabled)); then
   printf 'Amatsukaze WebUI: http://<録画ホストIP>:%s/\nEPGStation のエンコード設定に Amatsukaze を自動追加します。初回起動で EPGStation プロファイルを作成します。\nWebUI で局別ロゴを登録し、サービス設定の CM 解析無効を解除してから録画のエンコードを選択してください。\n' "$amatsukaze_port"
@@ -304,8 +307,8 @@ printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonom
 if ((amatsukaze_enabled)); then printf 'Amatsukaze WebUI: http://%s:%s/\n' "$ipaddr" "$amatsukaze_port"; fi
 if ((https_enabled)); then printf 'recisdb-proxy HTTPS: https://%s:%s/\nEPGStation HTTPS: https://%s:%s/\n' "$konomi_host" "$p4" "$konomi_host" "$p5"; fi
 if ((edcb_enabled)); then
-  printf 'EDCB WebUI: http://%s:%s/EMWUI/\n' "$ipaddr" "$edcb_port"
-  if ((https_enabled)); then printf 'EDCB HTTPS: https://%s:%s/EMWUI/\n' "$konomi_host" "$edcb_https_port"; fi
+  printf 'EDCB WebUI: http://%s:%s/E3/\n' "$ipaddr" "$edcb_port"
+  if ((https_enabled)); then printf 'EDCB HTTPS: https://%s:%s/E3/\n' "$konomi_host" "$edcb_https_port"; fi
   echo 'recisdb-proxy のチャンネルスキャン後、make edcb-chset で EDCB に反映してください。'
 fi
 printf 'BonCasRelay Web 設定: カードホスト上で http://127.0.0.1:6980/\n'

@@ -1,4 +1,4 @@
-# Compose向け初期設定。実値は .env から entrypoint が置換する。
+# 初期設定のテンプレート。setup.sh が .env の BONCAS_* を埋め込み config/recisdb-proxy/recisdb-proxy.toml を作る。
 [server]
 listen = "0.0.0.0:40070"
 web_listen = "0.0.0.0:40080"

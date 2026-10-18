@@ -1,18 +1,11 @@
 #!/bin/sh
 set -eu
-if [ -z "${BONCAS_B25_HOST:-}" ]; then
-  echo "BONCAS_B25_HOST is required" >&2
+# Settings are created on the host by setup.sh (config/recisdb-proxy/recisdb-proxy.toml) and bind-mounted here.
+# The file is never regenerated at container start, so user edits survive restarts.
+config=/data/recisdb-proxy.toml
+if [ ! -f "$config" ]; then
+  echo "[recisdb-proxy] $config がありません。setup.sh を実行してください (または make regen-config SERVICE=recisdb-proxy)。" >&2
   exit 1
 fi
-
-envsubst "\${BONCAS_B25_HOST} \${BONCAS_B25_PORT} \${BONCAS_4K_HOST} \${BONCAS_4K_PORT}" \
-  < /config/recisdb-proxy.toml.example > /data/recisdb-proxy.toml.tmp
-if [ -n "${BONCAS_4K_HOST:-}" ]; then
-  mv /data/recisdb-proxy.toml.tmp /data/recisdb-proxy.toml
-else
-  sed '/^\[mmttlv\]$/,/^\[/ { /^\[mmttlv\]$/d; /^boncaslink_server[[:space:]]*=/d; }' \
-    /data/recisdb-proxy.toml.tmp > /data/recisdb-proxy.toml
-  rm /data/recisdb-proxy.toml.tmp
-fi
 cd /data
-exec recisdb-proxy --config /data/recisdb-proxy.toml --database /data/recisdb-proxy.db --log-dir /data/logs
+exec recisdb-proxy --config "$config" --database /data/recisdb-proxy.db --log-dir /data/logs

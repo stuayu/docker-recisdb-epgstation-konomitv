@@ -1,8 +1,8 @@
 FROM debian:bookworm AS builder
 ARG EDCB_REPO=https://github.com/stuayu/EDCB.git
 ARG EDCB_REF=my-build
-ARG EDCB_WEBUI_REPO=https://github.com/stuayu/EDCB_Material_WebUI.git
-ARG EDCB_WEBUI_REF=dev
+ARG EDCB_WEBUI_REPO=https://github.com/EMWUI/EDCB_Material_WebUI.git
+ARG EDCB_WEBUI_REF=E3
 ARG EDCB_BONDRIVER_REPO=https://github.com/matching/BonDriver_LinuxMirakc.git
 ARG EDCB_BONDRIVER_REF=main
 RUN apt-get update && apt-get install -y --no-install-recommends \

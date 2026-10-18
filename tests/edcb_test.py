@@ -17,17 +17,24 @@ with tempfile.TemporaryDirectory() as temp:
     env = dict(os.environ, EDCB_ROOT=str(base / 'edcb'), EDCB_LIB=str(base / 'lib'),
                EDCB_DEFAULTS=str(base / 'defaults'), EDCB_RECORDED=str(base / 'recorded'),
                EDCB_TUNER_COUNT='3', EDCB_RETRY_SECONDS='0')
-    (base / 'defaults/HttpPublic/EMWUI').mkdir(parents=True)
-    (base / 'defaults/HttpPublic/EMWUI/index.html').write_text('webui')
+    (base / 'defaults/HttpPublic/E3').mkdir(parents=True)
+    (base / 'defaults/HttpPublic/E3/index.html').write_text('webui')
     configure = ['python3', str(ROOT / 'docker/edcb/configure.py')]
     subprocess.run(configure, env=env, check=True)
     ini = base / 'edcb/EpgTimerSrv.ini'
     assert 'Count=3' in ini.read_text() and 'RecMode=3' in ini.read_text()
+    assert 'HttpNumThreads=50' in ini.read_text()
     assert 'Scramble=0' in (base / 'edcb/EpgDataCap_Bon.ini').read_text()
     assert 'SERVICE_SPLIT=1' in (base / 'lib/BonDriver_LinuxMirakc.so.ini').read_text()
     ini.write_text('user settings\n')
     subprocess.run(configure, env=env, check=True)
     assert ini.read_text() == 'user settings\n'
+    # Material WebUI code follows the image on every start; Setting/ stays user-owned.
+    (base / 'defaults/HttpPublic/E3/index.html').write_text('webui v2')
+    (base / 'edcb/Setting/HttpPublic.ini').write_text('[E3]\nuseSsePort=1\n')
+    subprocess.run(configure, env=env, check=True)
+    assert (base / 'edcb/HttpPublic/E3/index.html').read_text() == 'webui v2'
+    assert 'useSsePort=1' in (base / 'edcb/Setting/HttpPublic.ini').read_text()
     services = [
         {'networkId': 4, 'serviceId': 101, 'channel': [{'type': 'BS'}]},
         {'networkId': 32744, 'serviceId': 1024, 'channel': [{'type': 'GR'}]},

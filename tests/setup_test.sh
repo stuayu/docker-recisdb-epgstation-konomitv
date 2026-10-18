@@ -70,6 +70,9 @@ SERVER_PORT=$(cat "$TMP/server-port")
 run_setup(){ (cd "$TMP/repo" && BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU="${1:-none}" KONOMITV_SOURCE="$TMP/repo/konomitv" SETUP_OS=Linux ./setup.sh --yes --no-build --no-start); }
 HTTPS=yes run_setup none >"$TMP/out"
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'default HTTPS COMPOSE_FILE'
+[[ -f $TMP/repo/config/recisdb-proxy/recisdb-proxy.toml && -f $TMP/repo/config/epgstation/config.yml && -f $TMP/repo/config/konomitv/config.yaml ]] || fail 'first run creates host config files'
+grep -q 'boncaslink_server = "127.0.0.1:'"$SERVER_PORT"'"' "$TMP/repo/config/recisdb-proxy/recisdb-proxy.toml" || fail 'relay address embedded in recisdb config'
+printf 'user_edit = true\n' >> "$TMP/repo/config/recisdb-proxy/recisdb-proxy.toml"
 grep -q "^BONCAS_B25_PORT=$SERVER_PORT$" "$ENV_FILE" || fail 'relay port changed by WebUI port loop'
 grep -q "^BONCAS_4K_PORT=$SERVER_PORT$" "$ENV_FILE" || fail '4K relay port changed'
 grep -q '^CUSTOM_KEEP=preserved$' "$ENV_FILE" || fail 'unrelated env key not preserved'
@@ -77,6 +80,8 @@ grep -q "$TMP/dev/px4video0:/dev/px4video0" "$TUNERS_COMPOSE_FILE" || { cat "$TU
 backup_found=0; for backup in "$ENV_FILE".bak.*; do [[ -f $backup ]] && backup_found=1; done
 ((backup_found)) || fail 'backup not created'
 
+HTTPS=no run_setup none >"$TMP/out"
+grep -q '^user_edit = true$' "$TMP/repo/config/recisdb-proxy/recisdb-proxy.toml" || fail 'setup overwrote user config'
 HTTPS=no run_setup none >"$TMP/out"
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml$' "$ENV_FILE" || fail 'HTTPS disabled COMPOSE_FILE'
 grep -q '^RECISDB_HTTPS_PORT=40443$' "$ENV_FILE" || fail 'HTTPS port setting preserved when disabled'
@@ -177,41 +182,19 @@ EDCB=no run_setup none >"$TMP/out"
 (cd "$TMP/repo" && EDCB=yes HTTPS=yes EDCB_WEB_PORT=5510 EDCB_HTTPS_PORT=8553 BONCAS_HOST=127.0.0.1 BONCAS_PORT="$SERVER_PORT" BONCAS_4K_SAME=yes RECORDED_DIR="$TMP/recorded" GPU=none KONOMITV_SOURCE="$TMP/repo/konomitv" ./setup.sh --yes --no-build) >"$TMP/edcb-full"
 grep -q 'http://127.0.0.1:5510/' "$CURL_CALLS" || fail 'EDCB HTTP probe'
 grep -q 'https://192-168-1-30.local.konomi.tv:8553/' "$CURL_CALLS" || fail 'EDCB HTTPS probe'
-grep -q 'EDCB WebUI: http://192.168.1.30:5510/EMWUI/' "$TMP/edcb-full" || fail 'EDCB WebUI URL'
+grep -q 'EDCB WebUI: http://192.168.1.30:5510/E3/' "$TMP/edcb-full" || fail 'EDCB WebUI URL'
 
-# Run the real entrypoint and real envsubst against the standard DB template.
-db=mariadb
-template="$ROOT/config/config.yml.example"
-  for enabled in 0 1; do
-    app="$TMP/epg-$db-$enabled"
-    mkdir -p "$app/config"
-    for name in operatorLogConfig serviceLogConfig epgUpdaterLogConfig; do touch "$app/config/$name.sample.yml"; done
-    EPGSTATION_APP_ROOT="$app" EPGSTATION_CONFIG_TEMPLATE="$template" AMATSUKAZE_ENABLED="$enabled" RUN_UID=1000 RUN_GID=1000 MARIADB_PASSWORD=test-password sh "$ROOT/docker/epgstation/entrypoint.sh" true
-    ruby -ryaml - "$app/config/config.yml" "$enabled" "$db" <<'RUBY'
-config = YAML.load_file(ARGV[0])
-enabled = ARGV[1] == '1'
-abort 'wrong database' unless config['dbtype'] == 'mysql'
-abort 'password not substituted' if ARGV[2] == 'mariadb' && config['mysql']['password'] != 'test-password'
-presets = config.fetch('encode')
-abort 'existing H264 preset changed' unless presets.any? { |p| p['id'] == 'h264-720p' && p['cmd'].include?('%NODE%') }
-amatsukaze = presets.select { |p| p['id'] == 'amatsukaze' }
-if enabled
-  c = config.fetch('amatsukaze')
-  abort 'connection config' unless c['host'] == 'amatsukaze' && c['port'] == 32768 && c['addTaskPath'] == '/opt/amatsukaze/AmatsukazeAddTask'
-  abort 'path/noMove config' unless c['pathMappings'] == [] && c['noMove'] == true && c['profile'] == 'EPGStation'
-  abort 'preset config' unless amatsukaze.length == 1 && amatsukaze[0]['suffix'] == '.mp4' && amatsukaze[0]['rate'] == 12.0 && amatsukaze[0]['cmd'] == '%NODE% %ROOT%/dist/AmatsukazeEncodeTool.js EPGStation'
-else
-  abort 'disabled config leaked' if config.key?('amatsukaze') || !amatsukaze.empty?
-end
-RUBY
-  done
-
-# The entrypoint must preserve punctuation and backslashes in an existing password.
-# shellcheck disable=SC2016
-export MARIADB_PASSWORD='a:b #c"d\e $value'
-EPGSTATION_APP_ROOT="$TMP/epg-mariadb-0" EPGSTATION_CONFIG_TEMPLATE="$ROOT/config/config.yml.example" sh "$ROOT/docker/epgstation/entrypoint.sh" true
-ruby -ryaml -e 'abort "password quoting" unless YAML.load_file(ARGV[0])["mysql"]["password"] == ENV.fetch("MARIADB_PASSWORD")' "$TMP/epg-mariadb-0/config/config.yml"
-unset MARIADB_PASSWORD
+# EPGStation uses the host-created config as is: the entrypoint never regenerates it.
+app="$TMP/epg-app"; mkdir -p "$app/config"
+for name in operatorLogConfig serviceLogConfig epgUpdaterLogConfig; do touch "$app/config/$name.sample.yml"; done
+printf 'user: edited\n' > "$app/config/config.yml"
+EPGSTATION_APP_ROOT="$app" AMATSUKAZE_ENABLED=0 sh "$ROOT/docker/epgstation/entrypoint.sh" true >/dev/null
+grep -qx 'user: edited' "$app/config/config.yml" || fail 'EPGStation entrypoint rewrote user config'
+[[ -f $app/config/operatorLogConfig.yml ]] || fail 'EPGStation sample log config not seeded'
+rm -f "$app/config/config.yml"
+if EPGSTATION_APP_ROOT="$app" sh "$ROOT/docker/epgstation/entrypoint.sh" true >"$TMP/epg-missing" 2>&1; then fail 'missing EPGStation config should stop'; fi
+grep -q 'setup.sh' "$TMP/epg-missing" || fail 'missing EPGStation config guidance'
+printf 'user: edited\n' > "$app/config/config.yml"
 
 # Root bootstrap delegates to the selected numeric identity and only repairs application state.
 cat > "$TMP/bin/chown" <<'EOFCHOWN'
@@ -225,9 +208,10 @@ shift
 exec "$@"
 EOFGOSU
 chmod +x "$TMP/bin/chown" "$TMP/bin/gosu"
-IDENTITY_CALLS="$TMP/identity.calls" TEST_UID=0 MARIADB_PASSWORD=test-password EPGSTATION_APP_ROOT="$TMP/epg-mariadb-1" EPGSTATION_CONFIG_TEMPLATE="$ROOT/config/config.yml.example" AMATSUKAZE_ENABLED=1 RUN_UID=1234 RUN_GID=2345 sh "$ROOT/docker/epgstation/entrypoint.sh" true
+IDENTITY_CALLS="$TMP/identity.calls" TEST_UID=0 EPGSTATION_APP_ROOT="$app" AMATSUKAZE_ENABLED=1 RUN_UID=1234 RUN_GID=2345 sh "$ROOT/docker/epgstation/entrypoint.sh" true
 grep -q 'gosu 1234:2345 true' "$TMP/identity.calls" || fail 'EPGStation identity drop'
 if grep -q /recorded "$TMP/identity.calls"; then fail 'recording ownership must not change'; fi
+if grep -v '^gosu' "$TMP/identity.calls" | grep -q 'config/config.yml'; then fail 'host config.yml ownership must not change'; fi
 
 # First start seeds bind mounts, later starts preserve user-edited profiles and assets.
 seed="$TMP/amatsukaze-defaults"; app="$TMP/amatsukaze-app"
@@ -247,7 +231,7 @@ ns = {'p': 'http://schemas.datacontract.org/2004/07/Amatsukaze.Server'}
 for k, v in {'Name':'EPGStation', 'EncoderType':'x264', 'DisableChapter':'false', 'NoDelogo':'false', 'OutputMask':'2', 'OutputFormat':'MP4', 'EnableRename':'false', 'MoveEDCBFiles':'false'}.items():
     assert p.find('p:' + k, ns).text == v, k
 PYXML
-echo 'PASS: Amatsukaze opt-in, GPU overrides, master migration, real entrypoint YAML (MariaDB, enabled/disabled), profile seed/nonoverwrite'
+echo 'PASS: Amatsukaze opt-in, GPU overrides, master migration, EPGStation entrypoint keeps host config, profile seed/nonoverwrite'
 
 cat > "$TMP/akebi-stub" <<'EOF'
 #!/bin/sh
