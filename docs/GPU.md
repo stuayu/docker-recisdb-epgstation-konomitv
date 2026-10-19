@@ -76,7 +76,7 @@ Amatsukaze では既存の build ARG 名を保持し、`ENABLE_VCEENC_AMF=0` で
 
 Intel / AMD の追加パッケージは amd64 分岐で導入します。Intel の iHD / i965 や OpenCL ランタイムを同居させても、全世代・全機能の動作を保証するわけではありません。特に Gen9 では Media SDK 系と実機の組合せを確認します。[Intel Media SDK](https://github.com/Intel-Media-SDK/MediaSDK) と [oneVPL GPU runtime](https://github.com/intel/vpl-gpu-rt) は別の実装であり、oneVPL 側の導入だけを旧世代対応の証拠にはしません。
 
-4つのエンコード用イメージには `LIBVA_DRIVERS_PATH=/usr/local/lib/dri` を設定し、共通導入処理から実際の multiarch DRI ディレクトリへリンクします。BtbN バイナリのように配布先 OS の既定 driver path を持たない場合も、noble の iHD / i965 / Mesa ドライバーへ到達させるためです。`LIBVA_DRIVER_NAME` は固定せず、すべての GPU を Intel ドライバーで開こうとする設定にはしません。
+EPGStation・recisdb-proxy・Amatsukaze の3イメージには `LIBVA_DRIVERS_PATH=/usr/local/lib/dri` を設定し、共通導入処理から実際の multiarch DRI ディレクトリへリンクします。BtbN バイナリのように配布先 OS の既定 driver path を持たない場合も、noble の iHD / i965 / Mesa ドライバーへ到達させるためです。`LIBVA_DRIVER_NAME` は固定せず、すべての GPU を Intel ドライバーで開こうとする設定にはしません。KonomiTV には設定しません。同梱の rigaya 系エンコーダーは同梱 libva と `thirdparty/Library/dri` の iHD を使い、システムの新しい iHD を読ませると `iHD_drv_video.so has no function __vaDriverInit_1_0` で初期化に失敗するためです。
 
 コンテナ内に GPU のカーネルモジュール、DKMS、ファームウェアは導入しません。ホスト側で動くドライバーとコンテナ内のユーザー空間ライブラリを組み合わせます。NVIDIA Container Toolkit の設定は [NVIDIA 公式手順](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)を確認してください。
 

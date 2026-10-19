@@ -4,7 +4,7 @@
 installed(){ command -v "$1" >/dev/null 2>&1; }
 offer_install(){
   local component=$1
-  if ! debian_host; then message "自動導入は Debian / Ubuntu 専用です。README の $component 導入手順を参照してください。"; return 1; fi
+  if ! debian_host; then message "自動導入は Debian / Ubuntu 専用です。docs/ADVANCED.md の「不足ソフトの判定と導入の根拠」を参照してください。"; return 1; fi
   # Show the actual versioned recipe, including repository writes and service restart.
   printf '\n導入手順 (%s):\n' "$component"
   cat "$ROOT/scripts/install-host.sh"
@@ -54,5 +54,5 @@ host_inventory(){
   fi
   report+="ファイアウォール: ${text:-状態不明 (権限が必要な場合は管理者が確認)}"
   message "$report"
-  if [[ $text == *'Status: active'* ]]; then message 'UFW 有効。Docker 公開ポートは UFW を迂回します。README の DOCKER-USER / ルーター ACL を確認してください。同梱 BonCasRelay の 6900 はホスト非公開、6980 はループバック限定です。'; fi
+  if [[ $text == *'Status: active'* ]]; then message 'UFW 有効。Docker 公開ポートは UFW を迂回します。docs/ADVANCED.md の「録画ホストのファイアウォール」にある DOCKER-USER / ルーター ACL を確認してください。同梱 BonCasRelay の 6900 はホスト非公開、6980 はループバック限定です。'; fi
 }

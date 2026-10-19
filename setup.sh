@@ -161,7 +161,7 @@ try:
 except OSError: sys.exit(1)
 PY
 then
-  echo 'BonCasRelay に接続できません。Relay 未起動、--allow に録画ホスト IP がない、ファイアウォールが原因候補です。カードホスト側の PC/SC・BonCasRelay の起動と許可設定も README の「ホスト機側の準備」で確認してください。'
+  echo 'BonCasRelay に接続できません。Relay 未起動、--allow に録画ホスト IP がない、ファイアウォールが原因候補です。カードホスト側の PC/SC・BonCasRelay の起動と許可設定も docs/BONCASRELAY.md の「カードホスト」手順で確認してください。'
   ip -brief -4 address 2>/dev/null || hostname -I 2>/dev/null || true
   ask '接続できないまま続けますか' 'はい'; [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail '接続確認で中止しました。' 'BonCasRelay と LAN 設定を確認してください。'
 fi
