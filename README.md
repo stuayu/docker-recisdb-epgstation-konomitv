@@ -216,3 +216,15 @@ Web 画面や Mirakurun API をインターネットへ直接公開しないで�
 - [チューナー自動設定の調査・設計](docs/TUNER_SETUP.md)
 - [提案資料](docs/PROPOSAL.md)
 - [開発・検証記録](docs/DEVELOPMENT.md)
+
+## ライセンス
+
+このリポジトリのスクリプト・設定・ドキュメントは [MIT License](LICENSE) です。
+
+ビルド時に取得する各ソフトウェアには、それぞれのライセンスが適用されます。主なもの:
+
+- MIT: KonomiTV、EPGStation、Akebi、EDCB-to-EPGStation、BonDriver_LinuxMirakc
+- GPL-3.0: recisdb-proxy-rs、BonCasRelay
+- EDCB、Amatsukaze、EDCB Material WebUI、FFmpeg、GPU ドライバーなどは、それぞれの配布元の条件に従います。
+
+この構成で作ったイメージを再配布する場合は、各ソフトウェアのライセンスを確認してください。
