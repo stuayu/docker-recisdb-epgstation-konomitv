@@ -1,0 +1,8 @@
+# Include only together with compose.amatsukaze.yaml and compose.amd.yaml.
+services:
+  amatsukaze:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-110}"

@@ -62,7 +62,7 @@ def ruby_yaml(path):
 
 
 dockerfile = (ROOT / 'docker/recisdb-proxy/Dockerfile').read_text(encoding='utf-8')
-check('FROM node:lts-bookworm-slim AS web-builder' in dockerfile and 'npm ci && npm run build' in dockerfile,
+check('FROM ubuntu:24.04 AS web-builder' in dockerfile and 'npm ci && npm run build' in dockerfile,
       'recisdb Dockerfile builds web UI with CI LTS Node and lockfile')
 check('COPY --from=web-builder /src/recisdb-proxy/static/vue /src/recisdb-proxy/static/vue' in dockerfile
       and dockerfile.index('COPY --from=web-builder') < dockerfile.index('RUN cargo build'),

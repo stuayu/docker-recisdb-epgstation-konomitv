@@ -88,6 +88,7 @@ if [[ $1 == -n && $2 == true ]]; then [[ ${SUDO_OK:-1} == 1 ]]; exit; fi
 exit 0''')
     stub(bin_dir, 'apt-get', 'echo "apt-get $*" >> "$CALLS"; exit 0')
     stub(bin_dir, 'systemctl', 'exit 1')
+    stub(bin_dir, 'stat', 'case $2 in %u:%g) echo 1000:1000;; %g) echo 44;; esac')
     stub(bin_dir, 'id', 'case $1 in -u|-g) echo 1000;; -un) echo tester;; esac')
     stub(bin_dir, 'getent', 'exit 1')
     stub(bin_dir, 'modinfo', '[[ ${DRIVER_OK:-0} == 1 ]]')

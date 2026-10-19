@@ -18,6 +18,7 @@ import sys
 import json
 from storage import directories, targets, mounts
 from editable import migrate_edcb, migrate_amatsukaze, migrate_edcb_access_defaults
+from generated_config import remember
 from dashboard import generate as generate_dashboard
 
 SERVICES = {
@@ -287,6 +288,7 @@ def first_run(root, env):
                 print(f'旧設定を移行: {legacy.relative_to(root)} -> {spec["output"]} (旧ファイルは残しています)')
             else:
                 write_new(out, render(name, (root / spec['template']).read_text(encoding='utf-8'), env), spec['mode'])
+                remember(root, out)
                 print(f'作成: {spec["output"]} (テンプレート {spec["template"]} から生成)')
             if name == 'recisdb-proxy':
                 migrate_recisdb_auth(root, out)
@@ -302,6 +304,7 @@ def regen(root, env, name, assume_yes, spec=None):
     if not out.exists():
         out.parent.mkdir(parents=True, exist_ok=True)
         write_new(out, new, spec['mode'])
+        remember(root, out)
         print(f'作成: {spec["output"]}')
         return
     old = out.read_text(encoding='utf-8')
@@ -331,6 +334,7 @@ def regen(root, env, name, assume_yes, spec=None):
     with out.open('w', encoding='utf-8') as file:
         file.write(new)
     os.chmod(out, spec['mode'])
+    remember(root, out)
     print(f'退避: {backup.relative_to(root)}')
     print(f'置き換え: {spec["output"]}')
     print(f'反映には docker compose restart {name} を実行してください。')

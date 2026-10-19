@@ -194,7 +194,14 @@ printf 'RESULT=%s\\n' "$storage_json"
     logpath = base / 'started'
     sock = socket.socket(socket.AF_UNIX)
     socket_path = base / 'pcsc.sock'; sock.bind(str(socket_path))
-    process = subprocess.run(['bash', str(ROOT / 'docker/boncasrelay/entrypoint.sh')], env=dict(os.environ,
+    # The production bootstrap installs into /opt; isolate both paths on macOS.
+    runtime_dir = base / 'relay-runtime'
+    runtime_dir.mkdir()
+    entrypoint = base / 'relay-entrypoint.sh'
+    entrypoint.write_text((ROOT / 'docker/boncasrelay/entrypoint.sh').read_text()
+                          .replace('/usr/local/libexec/boncasrelay/boncasrelay', str(binaries / 'boncasrelay'))
+                          .replace('/opt/boncasrelay/boncasrelay', str(runtime_dir / 'boncasrelay')))
+    process = subprocess.run(['bash', str(entrypoint)], env=dict(os.environ,
                PATH=str(binaries) + ':' + os.environ['PATH'], USB_DEV_ROOT=str(base / 'no-usb'),
                PCSC_SOCKET=str(socket_path), START_LOG=str(logpath)), capture_output=True, text=True, timeout=10)
     sock.close()

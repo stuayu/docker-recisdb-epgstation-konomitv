@@ -54,8 +54,8 @@ ui_ask(){
     'HTTPS 経路を有効にしますか') REPLY=$HTTPS; return;;
     'Amatsukaze を使いますか (既定: はい)') REPLY=$AMATSUKAZE; return;;
     'EDCB を使いますか (既定: はい)') REPLY=$EDCB; return;;
-    'GPU (none / intel = Intel/AMD /dev/dri / nvidia)')
-      REPLY=$(ui --default-item "$default" --menu 'GPU を確認' 16 76 4 none 'ソフトウェア' intel 'Intel / AMD (/dev/dri)' nvidia 'NVIDIA' 3>&1 1>&2 2>&3) || exit 1
+    'GPU (none / intel / amd / nvidia)')
+      REPLY=$(ui --default-item "$default" --menu 'GPU を確認' 16 76 4 none 'ソフトウェア' intel 'Intel (/dev/dri)' amd 'AMD (/dev/dri; KFD は任意)' nvidia 'NVIDIA' 3>&1 1>&2 2>&3) || exit 1
       return;;
   esac
   if [[ $prompt == *ポート* && $ADVANCED_PORTS == 0 ]]; then REPLY=$default; return; fi

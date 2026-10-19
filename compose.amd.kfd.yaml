@@ -1,0 +1,11 @@
+# Add only when the host provides /dev/kfd for ROCm/OpenCL.
+services:
+  recisdb-proxy:
+    devices:
+      - /dev/kfd:/dev/kfd
+  epgstation:
+    devices:
+      - /dev/kfd:/dev/kfd
+  konomitv:
+    devices:
+      - /dev/kfd:/dev/kfd

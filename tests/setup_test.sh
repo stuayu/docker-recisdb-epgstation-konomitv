@@ -29,9 +29,16 @@ EOF
 cat > "$TMP/bin/getent" <<'EOF'
 #!/usr/bin/env bash
 [[ $1 == group && $2 == video ]] && echo 'video:x:44:'
+[[ $1 == group && $2 == render && ${RENDER_GROUP_STUB:-0} == 1 ]] && echo 'render:x:110:'
 EOF
 cat > "$TMP/bin/stat" <<'EOF'
 #!/usr/bin/env bash
+if [[ $2 == %u:%g ]]; then
+  owner_uid=$(sed -n 's/^RUN_UID=//p' "$ENV_FILE" | tail -n1)
+  owner_gid=$(sed -n 's/^RUN_GID=//p' "$ENV_FILE" | tail -n1)
+  echo "${owner_uid:-1000}:${owner_gid:-1000}"
+  exit 0
+fi
 [[ $3 == *renderD* ]] && exit 1
 echo 44
 EOF
@@ -81,7 +88,7 @@ exit 1
 EOF
 chmod +x "$TMP/bin/"*
 export AMATSUKAZE=no EDCB=no
-export PATH="$TMP/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" SYSTEMCTL_CALLS="$TMP/systemctl.calls" SUDO_CALLS="$TMP/sudo.calls" DEV_DIR="$TMP/dev" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
+export PATH="$TMP/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" HOME="$TMP/home" DOCKER_BIN="$TMP/bin/docker" DOCKER_CALLS="$TMP/docker.calls" CURL_CALLS="$TMP/curl.calls" SYSTEMCTL_CALLS="$TMP/systemctl.calls" SUDO_CALLS="$TMP/sudo.calls" DEV_DIR="$TMP/dev" SYS_DRM_DIR="$TMP/sys-drm" TUNERS_COMPOSE_FILE="$TMP/repo/compose.tuners.yaml" ENV_FILE="$TMP/repo/.env" SETUP_OS=Linux
 python3 -u -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); print(s.getsockname()[1],flush=True); exec("while True:\n c,_=s.accept(); c.close()")' > "$TMP/server-port" &
 SERVER_PID=$!
 disown "$SERVER_PID" 2>/dev/null || true
@@ -128,15 +135,15 @@ grep -q '^RECISDB_HTTPS_PORT=40443$' "$ENV_FILE" || fail 'HTTPS port setting pre
 HTTPS=yes run_setup none >"$TMP/out"
 grep -q ':compose.https.yaml$' "$ENV_FILE" || fail 'HTTPS re-enable COMPOSE_FILE'
 
-mkdir -p "$TMP/dev/dri"; touch "$TMP/dev/dri/renderD128"
+mkdir -p "$TMP/dev/dri" "$TMP/sys-drm/renderD128/device"; touch "$TMP/dev/dri/renderD128"; echo 0x8086 > "$TMP/sys-drm/renderD128/device/vendor"
 sed -i.bak '/^RENDER_GID=/d' "$ENV_FILE"
 printf 'VIDEO_GID=77\n' >> "$ENV_FILE"
 run_setup intel >"$TMP/out"
 grep -q '^RENDER_GID=77$' "$ENV_FILE" || fail 'legacy Intel VIDEO_GID migrated to RENDER_GID'
-if grep -q '^VIDEO_GID=' "$ENV_FILE"; then fail 'legacy VIDEO_GID removed'; fi
+grep -q '^VIDEO_GID=44$' "$ENV_FILE" || fail 'video GID now separate from migrated render GID'
 grep -q '^COMPOSE_FILE=compose.yaml:compose.tuners.yaml:compose.intel.yaml:compose.https.yaml$' "$ENV_FILE" || fail 'Intel COMPOSE_FILE'
 rm "$TMP/dev/dri/renderD128"; if run_setup intel >"$TMP/intel-missing" 2>&1; then fail 'Intel GPU without render node should stop by default'; fi
-grep -q 'renderD\* がありません' "$TMP/intel-missing" || fail 'Intel render node guidance'
+grep -q 'GPU に対応する render node' "$TMP/intel-missing" || fail 'Intel render node guidance'
 rmdir "$TMP/dev/dri"
 if NVIDIA_OK=1 NVIDIA_TOOLKIT_OK=0 run_setup nvidia >"$TMP/nvidia-missing" 2>&1; then fail 'NVIDIA runtime missing should stop by default'; fi
 grep -q 'NVIDIA Container Toolkit' "$TMP/nvidia-missing" || fail 'NVIDIA toolkit guidance'
@@ -182,10 +189,32 @@ grep -q '^RUN_UID=1000$' "$ENV_FILE" || fail 'shared UID'
 grep -q '^RUN_GID=1000$' "$ENV_FILE" || fail 'shared GID'
 grep -q '^EPGSTATION_REF=main$' "$ENV_FILE" || fail 'obsolete master migration'
 if grep -q '^EPGSTATION_REF=master$' "$ENV_FILE"; then fail 'duplicate obsolete master remains'; fi
-mkdir -p "$TMP/dev/dri"; touch "$TMP/dev/dri/renderD128"
+mkdir -p "$TMP/dev/dri" "$TMP/sys-drm/renderD128/device"; touch "$TMP/dev/dri/renderD128"; echo 0x8086 > "$TMP/sys-drm/renderD128/device/vendor"
 AMATSUKAZE=yes run_setup intel >"$TMP/out"
 grep -q ':compose.amatsukaze.yaml:compose.amatsukaze.intel.yaml$' "$ENV_FILE" || fail 'conditional Amatsukaze Intel override'
-rm "$TMP/dev/dri/renderD128"; rmdir "$TMP/dev/dri"
+echo 0x1002 > "$TMP/sys-drm/renderD128/device/vendor"
+touch "$TMP/dev/kfd"
+AMATSUKAZE=yes RENDER_GROUP_STUB=1 run_setup amd >"$TMP/out"
+grep -q ':compose.amd.yaml:compose.amd.kfd.yaml:.*compose.amatsukaze.amd.yaml:compose.amatsukaze.amd.kfd.yaml$' "$ENV_FILE" || fail 'AMD KFD and Amatsukaze overlays'
+grep -q '^GPU=amd$' "$ENV_FILE" || fail 'GPU selection persisted'
+grep -q '^VIDEO_GID=44$' "$ENV_FILE" || fail 'AMD video group'
+rm "$TMP/dev/kfd"
+AMATSUKAZE=yes run_setup amd >"$TMP/amd-missing-kfd" 2>&1 || fail 'AMD without kfd should continue'
+grep -q 'KFD.*無効' "$TMP/amd-missing-kfd" || grep -q 'ROCm/OpenCL のみ無効' "$TMP/amd-missing-kfd" || fail 'AMD optional kfd warning'
+grep -q ':compose.amd.yaml:.*compose.amatsukaze.amd.yaml$' "$ENV_FILE" || fail 'AMD without KFD uses base overlays'
+if grep '^COMPOSE_FILE=' "$ENV_FILE" | grep -q 'amd.kfd'; then fail 'AMD without KFD selected KFD overlay'; fi
+rm "$TMP/sys-drm/renderD128/device/vendor"
+mkdir -p "$TMP/sys-drm/renderD129/device"; echo 0x1002 > "$TMP/sys-drm/renderD129/device/vendor"
+if AMATSUKAZE=yes run_setup amd >"$TMP/amd-node-missing" 2>&1; then fail 'AMD must not use another vendor render node'; fi
+grep -q '別ベンダーの node は使いません' "$TMP/amd-node-missing" || fail 'AMD wrong-node fallback warning'
+touch "$TMP/dev/dri/renderD129"
+rm "$TMP/dev/dri/renderD128"
+AMATSUKAZE=yes RENDER_GROUP_STUB=1 run_setup amd >"$TMP/out"
+grep -q 'render グループ GID: 110 (/.*renderD129)' "$TMP/out" || fail 'selected AMD render node not reported'
+grep -q 'EPGStation の一部設定は renderD128 固定' "$TMP/out" || fail 'EPGStation render node mismatch warning missing'
+rm "$TMP/dev/dri/renderD129" "$TMP/sys-drm/renderD129/device/vendor"
+rm -rf "$TMP/sys-drm/renderD129"
+rmdir "$TMP/dev/dri"
 AMATSUKAZE=yes NVIDIA_OK=1 NVIDIA_TOOLKIT_OK=1 run_setup nvidia >"$TMP/out"
 grep -q ':compose.amatsukaze.yaml:compose.amatsukaze.nvidia.yaml$' "$ENV_FILE" || fail 'conditional Amatsukaze NVIDIA override'
 AMATSUKAZE=no run_setup none >"$TMP/out"
@@ -247,17 +276,18 @@ cat > "$TMP/bin/chown" <<'EOFCHOWN'
 #!/bin/sh
 printf '%s\n' "$*" >> "$IDENTITY_CALLS"
 EOFCHOWN
-cat > "$TMP/bin/gosu" <<'EOFGOSU'
+cat > "$TMP/bin/setpriv" <<'EOFSETPRIV'
 #!/bin/sh
-printf 'gosu %s\n' "$*" >> "$IDENTITY_CALLS"
+printf 'setpriv %s\n' "$*" >> "$IDENTITY_CALLS"
+while [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
-EOFGOSU
-chmod +x "$TMP/bin/chown" "$TMP/bin/gosu"
+EOFSETPRIV
+chmod +x "$TMP/bin/chown" "$TMP/bin/setpriv"
 IDENTITY_CALLS="$TMP/identity.calls" TEST_UID=0 EPGSTATION_APP_ROOT="$app" AMATSUKAZE_ENABLED=1 RUN_UID=1234 RUN_GID=2345 sh "$ROOT/docker/epgstation/entrypoint.sh" true
-grep -q 'gosu 1234:2345 true' "$TMP/identity.calls" || fail 'EPGStation identity drop'
+grep -q 'setpriv --reuid 1234 --regid 2345 --keep-groups -- true' "$TMP/identity.calls" || fail 'EPGStation identity drop retains GPU groups'
 if grep -q /recorded "$TMP/identity.calls"; then fail 'recording ownership must not change'; fi
-if grep -v '^gosu' "$TMP/identity.calls" | grep -q 'config/config.yml'; then fail 'host config.yml ownership must not change'; fi
+if grep -v '^setpriv' "$TMP/identity.calls" | grep -q 'config/config.yml'; then fail 'host config.yml ownership must not change'; fi
 
 # First start seeds bind mounts, later starts preserve user-edited profiles and assets.
 seed="$TMP/amatsukaze-defaults"; app="$TMP/amatsukaze-app"

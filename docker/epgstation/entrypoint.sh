@@ -22,13 +22,17 @@ if [ "${AMATSUKAZE_ENABLED:-0}" = 1 ]; then
   if [ "$(id -u)" = 0 ]; then
     find "$app_root/config" -mindepth 1 -maxdepth 1 ! -name config.yml -exec chown -R "$RUN_UID:$RUN_GID" {} +
     chown -R "$RUN_UID:$RUN_GID" "$app_root/data" "$app_root/logs" "$app_root/thumbnail" "$app_root/drop"
-    if ! gosu "$RUN_UID:$RUN_GID" test -r "$config"; then
+    # Keep Compose group_add (render/tuner groups) when dropping root privileges.
+    # Match gosu's HOME selection for numeric UIDs, including UIDs absent from passwd.
+    HOME=$(getent passwd "$RUN_UID" | cut -d: -f6)
+    export HOME="${HOME:-/}"
+    if ! setpriv --reuid "$RUN_UID" --regid "$RUN_GID" --keep-groups -- test -r "$config"; then
       echo "[epgstation] $config を UID=$RUN_UID GID=$RUN_GID で読めません。ホストの所有者・権限を合わせてください (setup.sh の RUN_UID/RUN_GID と一致させます)。" >&2
       exit 1
     fi
     cd "$app_root"
-    if [ "$#" -gt 0 ]; then exec gosu "$RUN_UID:$RUN_GID" "$@"; fi
-    exec gosu "$RUN_UID:$RUN_GID" npm start
+    if [ "$#" -gt 0 ]; then exec setpriv --reuid "$RUN_UID" --regid "$RUN_GID" --keep-groups -- "$@"; fi
+    exec setpriv --reuid "$RUN_UID" --regid "$RUN_GID" --keep-groups -- npm start
   fi
 fi
 cd "$app_root"

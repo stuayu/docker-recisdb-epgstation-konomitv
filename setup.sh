@@ -17,14 +17,14 @@ usage() {
   --no-build         Docker イメージをビルドしない
   --no-start         コンテナを起動しない
   --no-scan          チューナー登録・スキャン・各サービスへの反映を省略
-  --reconfigure      質問と設定だけやり直す (ビルド・起動しない)
+  --reconfigure      質問・GPUプローブ・設定をやり直す (ビルド・サービス起動なし)
   --install-docker   Docker 公式 apt リポジトリから確認後に導入
   --auto-install     不足ソフトの導入・sudo 操作の確認を省略
   --storage-only     録画先だけ変更 (make storage)
   --help             このヘルプ
 
 非対話環境変数: BONCAS_HOST, BONCAS_PORT, BONCAS_4K_SAME,
-RECORDED_DIR, GPU (none|intel|nvidia),
+RECORDED_DIR, GPU (none|intel|amd|nvidia),
 RECISDB_WEB_PORT, EPGSTATION_PORT, KONOMITV_PORT, HTTPS (yes|no),
 RECISDB_HTTPS_PORT, EPGSTATION_HTTPS_PORT, KONOMITV_SOURCE,
 AMATSUKAZE (yes|no), AMATSUKAZE_WEBUI_PORT, RUN_UID, RUN_GID,
@@ -173,23 +173,37 @@ if [[ $same != はい && $same != y && $same != yes ]]; then ask '4K BonCasRelay
 fi
 
 step 'GPU・追加サービス・ポートを設定'
-gpu_default=none; [[ -d $DEV_DIR/dri ]] && gpu_default=intel; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1 && gpu_default=nvidia
-if command -v lspci >/dev/null && lspci | grep -qi NVIDIA; then gpu_default=nvidia; fi
+gpu_default=$(python3 "$ROOT/scripts/gpu_setup.py" detect)
+printf 'GPU 自動検出: %s (複数時は NVIDIA → AMD → Intel。GPU=... で上書き可能)\n' "$gpu_default"
 existing_compose=$(get COMPOSE_FILE compose.yaml:compose.tuners.yaml:compose.https.yaml)
 https_default=no; [[ $existing_compose == *compose.https.yaml* ]] && https_default=yes
 [[ $existing_compose == *compose.intel.yaml* ]] && gpu_default=intel
+[[ $existing_compose == *compose.amd.yaml* ]] && gpu_default=amd
 [[ $existing_compose == *compose.nvidia.yaml* ]] && gpu_default=nvidia
-ask 'GPU (none / intel = Intel/AMD /dev/dri / nvidia)' "${GPU:-$gpu_default}"; gpu=$REPLY
-[[ $gpu == none || $gpu == intel || $gpu == nvidia ]] || fail 'GPU の選択が不正です。' 'none、intel、nvidia のいずれかを選択してください。'
-if [[ $gpu == intel ]]; then
-  render_node=''; for p in "$DEV_DIR"/dri/renderD*; do [[ -e $p ]] && render_node=$p && break; done
+saved_gpu=$(get GPU auto)
+case $saved_gpu in none|intel|amd|nvidia) gpu_default=$saved_gpu;; esac
+ask 'GPU (none / intel / amd / nvidia)' "${GPU:-$gpu_default}"; gpu=$REPLY
+[[ $gpu == none || $gpu == intel || $gpu == amd || $gpu == nvidia ]] || fail 'GPU の選択が不正です。' 'none、intel、amd、nvidia のいずれかを選択してください。'
+if [[ $gpu == intel || $gpu == amd ]]; then
+  render_rel=$(python3 "$ROOT/scripts/gpu_setup.py" render-node --gpu "$gpu" --sys-drm "${SYS_DRM_DIR:-/sys/class/drm}")
+  render_node=''; [[ -z $render_rel ]] || render_node="$DEV_DIR/dri/${render_rel##*/}"
+  [[ -n $render_node && -e $render_node ]] || render_node=''
   if [[ -z $render_node ]]; then
-    printf 'GPU を選びましたが %s/dri/renderD* がありません。GPU ドライバーと render グループを確認してください。\n' "$DEV_DIR"
+    printf '選択した %s GPU に対応する render node が %s/dri にありません。別ベンダーの node は使いません。GPU ドライバーと render グループを確認してください。\n' "$gpu" "$DEV_DIR"
     ask 'デバイスなしで続けますか' 'いいえ'
     [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail 'Intel/AMD GPU デバイスを確認できません。' 'GPU を導入するか、GPU=none で再実行してください。'
   else
+    if [[ ${render_rel##*/} != renderD128 ]]; then
+      printf '警告: 選択した GPU は %s です。EPGStation の一部設定は renderD128 固定のため確認してください。\n' "$render_rel"
+    fi
     render_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true)
     [[ -z $render_gid ]] || printf 'render グループ GID: %s (%s)\n' "$render_gid" "$render_node"
+  fi
+fi
+amd_kfd=0
+if [[ $gpu == amd ]]; then
+  if [[ -e $DEV_DIR/kfd ]]; then amd_kfd=1
+  else printf '警告: %s/kfd がありません。AMD VA-API / AMF を使い、ROCm/OpenCL のみ無効として続行します。\n' "$DEV_DIR"
   fi
 fi
 if [[ $gpu == nvidia ]]; then
@@ -280,10 +294,12 @@ relay_port=$port
 for port in "$p1" "$p2" "$p3" "$p4" "$p5" "$amatsukaze_port" "$edcb_port" "$edcb_https_port" "$boncas_web_port"; do
   if [[ ! $port =~ ^[0-9]+$ ]] || ((port<=0 || port>=65536)); then fail 'ポート番号が不正です。' '1〜65535 の数字を指定してください。'; fi
 done
-compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; ((https_enabled)) && compose+=:compose.https.yaml
+compose=compose.yaml:compose.tuners.yaml; [[ $gpu == intel ]] && compose+=:compose.intel.yaml; [[ $gpu == amd ]] && compose+=:compose.amd.yaml; (( amd_kfd )) && compose+=:compose.amd.kfd.yaml; [[ $gpu == nvidia ]] && compose+=:compose.nvidia.yaml; ((https_enabled)) && compose+=:compose.https.yaml
 if ((amatsukaze_enabled)); then
   compose+=:compose.amatsukaze.yaml
   [[ $gpu == intel ]] && compose+=:compose.amatsukaze.intel.yaml
+  [[ $gpu == amd ]] && compose+=:compose.amatsukaze.amd.yaml
+  (( amd_kfd )) && compose+=:compose.amatsukaze.amd.kfd.yaml
   [[ $gpu == nvidia ]] && compose+=:compose.amatsukaze.nvidia.yaml
 fi
 if ((edcb_enabled)); then
@@ -302,12 +318,10 @@ profiles=$(get COMPOSE_PROFILES '')
 profiles=$(printf '%s' "$profiles" | tr ',' '\n' | sed '/^mariadb$/d' | paste -sd, -)
 put COMPOSE_PROFILES "$profiles"
 render_gid=$(get RENDER_GID '')
-if [[ $gpu == intel ]]; then
-  for render_node in "$DEV_DIR"/dri/renderD*; do
-    [[ -e $render_node ]] || continue
+if [[ $gpu == intel || $gpu == amd ]]; then
+  if [[ -n $render_node && -e $render_node ]]; then
     render_gid=$(stat -c '%g' "$render_node" 2>/dev/null || true)
-    [[ -n $render_gid ]] && break
-  done
+  fi
   if [[ -z $render_gid ]]; then render_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true); fi
   # VIDEO_GID was the render group on older Intel setups.
   if [[ -z $render_gid ]]; then render_gid=$(get VIDEO_GID ''); fi
@@ -315,6 +329,15 @@ fi
 [[ $render_gid =~ ^[0-9]+$ ]] || render_gid=$(getent group render 2>/dev/null | awk -F: '{print $3}' || true)
 [[ $render_gid =~ ^[0-9]+$ ]] || render_gid=110
 put RENDER_GID "$render_gid"
+video_gid=$(getent group video 2>/dev/null | awk -F: '{print $3}' || true)
+for video_node in "$DEV_DIR"/dri/card* "$DEV_DIR"/kfd; do
+  [[ -e $video_node ]] || continue
+  video_gid=$(stat -c '%g' "$video_node" 2>/dev/null || true)
+  [[ -n $video_gid ]] && break
+done
+[[ $video_gid =~ ^[0-9]+$ ]] || video_gid=44
+put VIDEO_GID "$video_gid"
+put GPU "$gpu"
 command -v openssl >/dev/null || fail 'openssl がありません。' 'sudo apt install -y openssl を実行してください。'
 mariadb_password=$(get MARIADB_PASSWORD ''); root_password=$(get MARIADB_ROOT_PASSWORD '')
 [[ -n $mariadb_password && $mariadb_password != change-me ]] || mariadb_password=$(openssl rand -hex 24)
@@ -337,7 +360,7 @@ if [[ ! -f $ENV_FILE ]]; then cp .env.example "$ENV_FILE"; fi
 if [[ -s $SETTINGS_FILE ]]; then
   if [[ -f $ENV_FILE ]]; then stamp=$(date +%Y%m%d%H%M%S%N); cp -p "$ENV_FILE" "$ENV_FILE.bak.$stamp"; chmod 600 "$ENV_FILE.bak.$stamp"; fi
   tmp=$(mktemp)
-  sed '/^SETUP_DB=/d; /^EDCB_RECORDING_PATHS=/d; /^BONCAS_SUBNET=/d; /^VIDEO_GID=/d' "$ENV_FILE" > "$tmp"
+  sed '/^SETUP_DB=/d; /^EDCB_RECORDING_PATHS=/d; /^BONCAS_SUBNET=/d' "$ENV_FILE" > "$tmp"
   python3 - "$tmp" "$SETTINGS_FILE" <<'PYENV'
 from pathlib import Path
 import sys
@@ -394,12 +417,19 @@ message '既存の設定ファイルは維持しました。録画先や Relay �
 if ((amatsukaze_enabled)); then
   printf 'Amatsukaze WebUI: http://<録画ホストIP>:%s/\nEPGStation のエンコード設定に Amatsukaze を自動追加します。初回起動で EPGStation プロファイルを作成します。\nWebUI で局別ロゴを登録し、サービス設定の CM 解析無効を解除してから録画のエンコードを選択してください。\n' "$amatsukaze_port"
 fi
+if ((RECONFIGURE)); then
+  python3 "$ROOT/scripts/gpu_setup.py" probe --root "$ROOT" --env "$ENV_FILE" --docker-bin "$docker_cmd" --gpu "$gpu" || fail 'GPU 再判定に失敗しました。' 'config/gpu-probe-log.json を確認してください。'
+fi
 if ((RECONFIGURE)); then message "${dashboard_urls}設定を更新しました。反映には make build && make up を実行してください。既存設定の再生成が必要な場合は上記案内も確認してください。"; exit 0; fi
 if ((NO_BUILD)); then echo 'ビルドを省略しました。'; else
   step 'Compose 設定を検証'
   "$docker_cmd" compose config >/dev/null || fail 'docker compose config が失敗しました。' '.env、Compose ファイル、KonomiTV_SOURCE を確認してください。'
   step 'Docker イメージをビルド (数分以上かかる場合があります)'
   run_logged build "$docker_cmd" compose build || fail 'Docker イメージのビルドに失敗しました。' 'ログの最初のエラー、空き容量、ネットワークを確認してください。'
+fi
+# --no-start leaves images/configs available without launching probe containers.
+if (( ! NO_START )); then
+  python3 "$ROOT/scripts/gpu_setup.py" probe --root "$ROOT" --env "$ENV_FILE" --docker-bin "$docker_cmd" --gpu "$gpu" || fail 'GPU 判定に失敗しました。' 'config/gpu-probe-log.json を確認してください。'
 fi
 if ((NO_START)); then message "設定完了。起動を省略しました。make build && make up && make scan で受信設定まで進めます。
 ${dashboard_urls}recisdb-proxy http://$ipaddr:$p1/ / EPGStation http://$ipaddr:$p2/
@@ -443,6 +473,10 @@ if ((services_ready && http_ready)); then
 else
   message 'サービスが起動・応答していないため、tsreadex の自動セットアップを省略しました。'
 fi
+step 'プレビューエンコーダを実行検証'
+if ((services_ready && http_ready)); then
+  python3 "$ROOT/scripts/gpu_setup.py" probe --root "$ROOT" --env "$ENV_FILE" --docker-bin "$docker_cmd" --gpu "$gpu" --preview-only || message 'プレビュー設定を維持しました。config/gpu-probe-log.json を確認してください。'
+fi
 step 'チューナー登録・チャンネルスキャン'
 if ((NO_SCAN)); then
   echo '登録・スキャンを省略しました。後で make scan を実行してください。'
@@ -480,6 +514,7 @@ if ((edcb_enabled && services_ready)); then
 else
   echo 'EDCB 無効、またはサービス未起動のため番組データ確認を省略。'
 fi
+python3 "$ROOT/scripts/gpu_setup.py" summary --root "$ROOT"
 step 'アクセス先と次の作業'
 printf '%s' "$dashboard_urls"
 printf 'recisdb-proxy HTTP: http://%s:%s/\nEPGStation HTTP: http://%s:%s/\nKonomiTV HTTPS: https://%s:%s/\n' "$ipaddr" "$p1" "$ipaddr" "$p2" "$konomi_host" "$p3"

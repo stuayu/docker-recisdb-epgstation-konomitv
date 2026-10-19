@@ -1,0 +1,20 @@
+# Amatsukaze 有効時は compose.amatsukaze.amd.yaml も追加する。setup.sh が自動選択。
+services:
+  recisdb-proxy:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-110}"
+  epgstation:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-110}"
+  konomitv:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-110}"

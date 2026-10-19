@@ -20,6 +20,8 @@ update:
 	docker compose up -d
 
 test:
+	python3 tests/gpu_setup_test.py
+	python3 tests/preview_profiles_test.py
 	bash tests/setup_test.sh
 	python3 tests/edcb_test.py
 	python3 tests/config_test.py

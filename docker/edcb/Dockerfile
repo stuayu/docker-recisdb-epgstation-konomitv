@@ -1,28 +1,33 @@
 ARG EDCB_EPGSTATION_ENABLED=0
-FROM node:24-bookworm-slim AS dashboard-builder
+FROM ubuntu:24.04 AS dashboard-builder
+COPY docker/common/install-node.sh /tmp/install-node.sh
+RUN sh /tmp/install-node.sh && rm /tmp/install-node.sh
 WORKDIR /dashboard
 COPY dashboard/package.json dashboard/package-lock.json dashboard/.npmrc ./
 RUN npm ci
 COPY dashboard/ ./
 RUN npm run typecheck && npm test && npm run build
 
-FROM rust:bookworm AS uploader-1
+FROM ubuntu:24.04 AS uploader-1
 ARG EDCB_TO_EPGSTATION_REPO=https://github.com/stuayu/EDCB-to-EPGStation.git
 ARG EDCB_TO_EPGSTATION_REF=main
 ARG EDCB_EPGSTATION_ENABLED=0
+COPY docker/common/install-rust.sh /tmp/install-rust.sh
+ENV PATH="/root/.cargo/bin:$PATH"
 RUN mkdir -p /out && if [ "$EDCB_EPGSTATION_ENABLED" = 1 ]; then \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    sh /tmp/install-rust.sh \
+    && apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && git clone "$EDCB_TO_EPGSTATION_REPO" /src && cd /src \
     && git fetch origin "$EDCB_TO_EPGSTATION_REF" && git checkout --detach FETCH_HEAD \
     && cargo build --locked --release \
     && cp target/release/edcb_to_epgstation_ts /out/; fi
 
-FROM debian:bookworm-slim AS uploader-0
+FROM ubuntu:24.04 AS uploader-0
 RUN mkdir /out
 
 FROM uploader-${EDCB_EPGSTATION_ENABLED} AS uploader
 
-FROM debian:bookworm AS builder
+FROM ubuntu:24.04 AS builder
 ARG EDCB_REPO=https://github.com/stuayu/EDCB.git
 ARG EDCB_REF=my-build
 ARG EDCB_WEBUI_REPO=https://github.com/EMWUI/EDCB_Material_WebUI.git
@@ -53,9 +58,9 @@ COPY --from=dashboard-builder /dashboard/dist/ /tmp/dashboard-dist/
 COPY docker/edcb/http_public.py docker/edcb/dashboard-index.lua /tmp/dashboard-install/
 RUN python3 /tmp/dashboard-install/http_public.py /tmp/dashboard-dist /var/local/edcb
 
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 ENV TZ=Asia/Tokyo LANG=C.UTF-8 EDCB_STACK_ROOT=/opt
-# Debian provides the Lua 5.2 and zlib modules described in HowToBuild.txt.
+# Ubuntu provides the Lua 5.2 and zlib modules described in HowToBuild.txt.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates liblua5.2-0 lua-zlib libstdc++6 python3 python3-yaml tini gosu curl tzdata \
     && rm -rf /var/lib/apt/lists/*
@@ -64,7 +69,7 @@ COPY --from=builder /usr/local/lib/edcb/ /usr/local/lib/edcb/
 COPY --from=builder /var/local/edcb/ /opt/edcb-defaults/
 COPY docker/edcb/entrypoint.sh /usr/local/bin/edcb-entrypoint.sh
 COPY docker/edcb/configure.py docker/edcb/chset.py docker/edcb/post-record.py docker/edcb/post-record.sh docker/edcb/http_public.py /opt/edcb-stack/
-COPY scripts/editable.py scripts/storage.py scripts/render-config.py scripts/dashboard.py /opt/scripts/
+COPY scripts/editable.py scripts/storage.py scripts/generated_config.py scripts/render-config.py scripts/dashboard.py /opt/scripts/
 COPY templates/edcb/ /opt/templates/edcb/
 COPY docker/edcb/upload_runtime.py /opt/edcb-stack/
 COPY --from=uploader /out/ /opt/edcb-upload/

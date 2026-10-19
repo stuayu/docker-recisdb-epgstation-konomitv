@@ -1,5 +1,21 @@
 # Amatsukaze 有効時は compose.amatsukaze.nvidia.yaml も追加する。setup.sh が自動選択。
 services:
+  recisdb-proxy:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility, video]
+  epgstation:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility, video]
   konomitv:
     deploy:
       resources:

@@ -99,13 +99,17 @@ gids = sys.argv[2]
 render_gid = sys.argv[3]
 lines = path.read_text().splitlines()
 values = dict(line.split('=', 1) for line in lines if '=' in line and not line.lstrip().startswith('#'))
+legacy_video = ('GPU' not in values and 'compose.intel.yaml' in values.get('COMPOSE_FILE', ''))
 if not render_gid:
-    if 'compose.intel.yaml' in values.get('COMPOSE_FILE', os.environ.get('COMPOSE_FILE', '')):
+    if legacy_video:
         render_gid = values.get('VIDEO_GID', values.get('RENDER_GID', '110'))
     else:
         render_gid = values.get('RENDER_GID', '110')
 updates = {'TUNER_GIDS': gids, 'RENDER_GID': render_gid}
-lines = [line for line in lines if line.split('=', 1)[0] not in updates and not line.startswith('VIDEO_GID=')]
+# VIDEO_GID is a distinct AMD video/kfd group in current setups. Only retire
+# the old Intel alias when this is still an unmigrated (GPU key absent) env.
+lines = [line for line in lines if line.split('=', 1)[0] not in updates
+         and not (legacy_video and line.startswith('VIDEO_GID='))]
 lines.extend(key + '=' + value for key, value in updates.items())
 path.write_text('\n'.join(lines) + '\n')
 PYENV

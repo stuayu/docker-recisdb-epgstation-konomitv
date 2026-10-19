@@ -183,7 +183,7 @@ class DashboardTest(unittest.TestCase):
 
     def test_build_contract(self):
         dockerfile = (ROOT / 'docker/edcb/Dockerfile').read_text()
-        stage = dockerfile.split('FROM node:24-bookworm-slim AS dashboard-builder\n')[1].split('\nFROM ')[0]
+        stage = dockerfile.split('FROM ubuntu:24.04 AS dashboard-builder\n')[1].split('\nFROM ')[0]
         self.assertLess(stage.index('npm ci'), stage.index('npm run typecheck'))
         self.assertIn('npm run typecheck && npm test && npm run build', stage)
         self.assertIn('COPY --from=dashboard-builder /dashboard/dist/', dockerfile)

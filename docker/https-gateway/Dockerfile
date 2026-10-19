@@ -1,5 +1,7 @@
-ARG GO_VERSION=1.24
-FROM golang:${GO_VERSION}-bookworm AS builder
+FROM ubuntu:24.04 AS builder
+COPY docker/common/install-go.sh /tmp/install-go.sh
+RUN sh /tmp/install-go.sh && rm /tmp/install-go.sh
+ENV PATH="/usr/local/go/bin:$PATH"
 ARG AKEBI_REPO=https://github.com/tsukumijima/Akebi.git
 ARG AKEBI_REF=8ddba6a29b858567ab286b5d31daebf2ff683e94
 WORKDIR /src
@@ -8,7 +10,7 @@ RUN git clone "${AKEBI_REPO}" . \
     && cd https-server \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/akebi-https-server .
 
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini netcat-openbsd \
     && rm -rf /var/lib/apt/lists/* \

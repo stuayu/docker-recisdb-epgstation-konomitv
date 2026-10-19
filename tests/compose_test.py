@@ -12,48 +12,69 @@ from storage import mounts
 root = Path(__file__).resolve().parents[1]
 binary = os.environ.get('COMPOSE_BIN', 'docker-compose')
 env = dict(os.environ, MARIADB_PASSWORD='compose-test', MARIADB_ROOT_PASSWORD='compose-root-test',
-           TUNER_GIDS='44,45', RENDER_GID='110')
+           TUNER_GIDS='44,45', VIDEO_GID='1044', RENDER_GID='1110')
 # Ignore a caller's selected default overrides: this test supplies every file.
 env.pop('COMPOSE_FILE', None)
 env.pop('COMPOSE_PROFILES', None)
+
+
+def compose_config(files, settings=env):
+    command = [binary, '--env-file', str(root / '.env.example')]
+    for file in files:
+        command.extend(['-f', str(file)])
+    output = subprocess.run(command + ['config', '--format', 'json'], cwd=root, env=settings,
+                            capture_output=True, text=True, check=True)
+    return json.loads(output.stdout)
+
+
 with tempfile.TemporaryDirectory() as temp:
     tuner_override = Path(temp) / 'compose.tuners.yaml'
-    tuner_override.write_text('services:\n  recisdb-proxy:\n    devices: []\n    group_add: ["44", "45"]\n')
-    for relay, edcb, amatsukaze, https, gpu in itertools.product((False, True), (False, True), (False, True), (False, True), ('none', 'intel', 'nvidia')):
+    tuner_devices = ['/dev/px4video0', '/dev/dvb/adapter0/frontend0']
+    tuner_override.write_text('services:\n  recisdb-proxy:\n    devices:\n' +
+                              ''.join(f'      - "{node}:{node}"\n' for node in tuner_devices) +
+                              '    group_add: ["44", "45"]\n')
+    for relay, edcb, amatsukaze, https, gpu, amd_kfd in itertools.product((False, True), (False, True), (False, True), (False, True), ('none', 'intel', 'amd', 'nvidia'), (False, True)):
         files = ['compose.yaml', str(tuner_override)]
         if gpu != 'none':
             files.append(f'compose.{gpu}.yaml')
+            if gpu == 'amd' and amd_kfd:
+                files.append('compose.amd.kfd.yaml')
         if https:
             files.append('compose.https.yaml')
         if amatsukaze:
             files.append('compose.amatsukaze.yaml')
             if gpu != 'none':
                 files.append(f'compose.amatsukaze.{gpu}.yaml')
+                if gpu == 'amd' and amd_kfd:
+                    files.append('compose.amatsukaze.amd.kfd.yaml')
         if edcb:
             files.append('compose.edcb.yaml')
             if https:
                 files.append('compose.edcb.https.yaml')
         if relay:
             files.append('compose.boncasrelay.yaml')
-        command = [binary, '--env-file', '.env.example']
-        for file in files:
-            command.extend(['-f', file])
-        output = subprocess.run(command + ['config', '--format', 'json'], cwd=root, env=env,
-                                capture_output=True, text=True, check=True)
-        config = json.loads(output.stdout)
+        config = compose_config(files)
         services = config['services']
-        assert set(services['recisdb-proxy']['group_add']) >= {'44', '45'}
+        gpu_devices = {'intel': ['/dev/dri'], 'amd': ['/dev/dri'] + (['/dev/kfd'] if amd_kfd else [])}.get(gpu, [])
+        gpu_groups = {'intel': {'1110'}, 'amd': {'1044', '1110'}}.get(gpu, set())
+        gpu_services = ['recisdb-proxy', 'epgstation', 'konomitv'] + (['amatsukaze'] if amatsukaze else [])
+        for name in gpu_services:
+            service = services[name]
+            expected_devices = (tuner_devices if name == 'recisdb-proxy' else []) + gpu_devices
+            devices = service.get('devices', [])
+            assert {device['target'] for device in devices} == set(expected_devices), (gpu, name, devices)
+            assert len(devices) == len(expected_devices), (gpu, name, devices)
+            assert all(device['source'] == device['target'] and device['permissions'] == 'rwm' for device in devices)
+            expected_groups = ({'44', '45'} if name == 'recisdb-proxy' else set()) | gpu_groups
+            assert set(service.get('group_add', [])) == expected_groups, (gpu, name, service.get('group_add'))
+            reservations = service.get('deploy', {}).get('resources', {}).get('reservations', {}).get('devices', [])
+            if gpu == 'nvidia':
+                assert len(reservations) == 1, (name, reservations)
+                assert reservations[0]['driver'] == 'nvidia' and reservations[0]['count'] == -1
+                assert set(reservations[0]['capabilities']) == {'compute', 'utility', 'video'}
+            else:
+                assert not reservations, (gpu, name, reservations)
         assert ('boncasrelay' in services) == relay
-        if gpu == 'intel':
-            assert services['epgstation']['group_add'] == ['110']
-            assert services['konomitv']['group_add'] == ['110']
-            if amatsukaze:
-                assert services['amatsukaze']['group_add'] == ['110']
-        else:
-            assert not services['epgstation'].get('group_add')
-            assert not services['konomitv'].get('group_add')
-            if amatsukaze:
-                assert not services['amatsukaze'].get('group_add')
         if relay:
             card = services['boncasrelay']
             assert [p['target'] for p in card['ports']] == [6980]
@@ -86,10 +107,19 @@ with tempfile.TemporaryDirectory() as temp:
             assert any(p['target'] == 8553 for p in gateway['ports']) == edcb
         if amatsukaze:
             assert services['epgstation']['environment']['AMATSUKAZE_ENABLED'] == '1'
-            ama = services['amatsukaze']
-            assert bool(ama.get('devices')) == (gpu == 'intel')
-            assert bool(ama.get('deploy', {}).get('resources', {}).get('reservations', {}).get('devices')) == (gpu == 'nvidia')
-print('PASS: real Docker Compose config matrix (48 combinations: BonCasRelay x EDCB x Amatsukaze x HTTPS x GPU)')
+    # setup.sh may place generated tuner overrides after GPU overlays. Preserve both
+    # device sets in that order too, including a duplicate /dev/dri mapping.
+    tuner_text = tuner_override.read_text()
+    for gpu in ('intel', 'amd', 'nvidia'):
+        tuner_override.write_text(tuner_text.replace('    group_add:',
+            ('      - "/dev/dri:/dev/dri"\n' if gpu != 'nvidia' else '') + '    group_add:'))
+        config = compose_config(['compose.yaml', f'compose.{gpu}.yaml', str(tuner_override)])
+        proxy = config['services']['recisdb-proxy']
+        extra_devices = {'intel': ['/dev/dri'], 'amd': ['/dev/dri']}.get(gpu, [])
+        assert {device['target'] for device in proxy['devices']} == set(tuner_devices + extra_devices)
+        assert len(proxy['devices']) == len(tuner_devices + extra_devices)
+        assert set(proxy['group_add']) >= {'44', '45'}
+print('PASS: real Docker Compose config matrix (128 combinations: BonCasRelay x EDCB x Amatsukaze x HTTPS x GPU x optional AMD KFD) and tuner/GPU merge order')
 
 with tempfile.TemporaryDirectory() as temp:
     directory = Path(temp).resolve()
@@ -97,12 +127,9 @@ with tempfile.TemporaryDirectory() as temp:
                 'RECORDED_DIRS_JSON': json.dumps([str(directory / 'disk one'), str(directory / 'disk two')]),
                 'COMPOSE_FILE': 'compose.yaml:compose.edcb.yaml:compose.amatsukaze.yaml'}
     mounts(directory, settings)
-    command = [binary, '--env-file', str(root / '.env.example')]
-    for file in (root / 'compose.yaml', root / 'compose.edcb.yaml', root / 'compose.amatsukaze.yaml', directory / 'compose.storage.yaml'):
-        command.extend(['-f', str(file)])
-    output = subprocess.run(command + ['config', '--format', 'json'], cwd=root,
-                            env=dict(env, RECORDED_DIR=settings['RECORDED_DIR'], RECORDED_DIRS_JSON=settings['RECORDED_DIRS_JSON']), capture_output=True, text=True, check=True)
-    services = json.loads(output.stdout)['services']
+    config = compose_config((root / 'compose.yaml', root / 'compose.edcb.yaml', root / 'compose.amatsukaze.yaml', directory / 'compose.storage.yaml'),
+                            dict(env, RECORDED_DIR=settings['RECORDED_DIR'], RECORDED_DIRS_JSON=settings['RECORDED_DIRS_JSON']))
+    services = config['services']
     assert services['edcb']['environment']['RECORDED_DIR'] == settings['RECORDED_DIR']
     assert json.loads(services['edcb']['environment']['RECORDED_DIRS_JSON']) == json.loads(settings['RECORDED_DIRS_JSON'])
     assert 'EDCB_RECORDING_PATHS' not in services['edcb']['environment']

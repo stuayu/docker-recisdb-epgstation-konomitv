@@ -1,0 +1,5 @@
+# Include with compose.amatsukaze.yaml and the AMD/KFD overlays.
+services:
+  amatsukaze:
+    devices:
+      - /dev/kfd:/dev/kfd

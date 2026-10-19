@@ -1,6 +1,13 @@
 # Amatsukaze 有効時は compose.amatsukaze.intel.yaml も追加する。setup.sh が自動選択。
 services:
+  recisdb-proxy:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-110}"
   epgstation:
+    devices:
+      - /dev/dri:/dev/dri
     group_add:
       - "${RENDER_GID:-110}"
   konomitv:

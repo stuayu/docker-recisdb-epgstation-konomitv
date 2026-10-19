@@ -34,9 +34,8 @@ RUN apt-get update \
 FROM ubuntu:24.04
 
 ARG ARCH=amd64
-ARG UBUNTU_NAME=noble
 # VCEEncCは常にVA-API (Mesa) で導入し、AMFは任意とする
-ARG ENABLE_VCEENC_AMF=0
+ARG ENABLE_VCEENC_AMF=1
 ARG QSVENCC_VER=8.33
 ARG NVENCC_VER=9.38
 ARG VCEENCC_VER=9.21
@@ -44,19 +43,6 @@ ARG VCEENCC_VER=9.21
 # NVEncCは無印のlibnvrtc.soをdlopenするが、このdebには含まれないためリンクを追加する
 ARG CUDA_NVRTC_DEB=cuda-nvrtc-11-8_11.8.89-1_amd64.deb
 ARG CUDA_NVRTC_SHA256=6f083fcd63b7f8ef7478bfb7b8aba938d8ca0b5684d610df1243302b12a54f06
-# Intel GPUのドライバ類はUbuntu向けのkobuk-team PPAから導入する
-# Haswell以前はi965のみ対応のため、QSVEncCのVA-APIバックエンド用にi965も導入する
-ARG INTEL_GRAPHICS_PPA_KEY=0C0E6AF955CE463C03FC51574D098D70AFBE5E1F
-# PPAのintel-opencl-icdはGen12以降のみ対応のため、Gen11以前 (Kaby Lake等) 向けに
-# Intel公式のlegacy1ランタイムを追加する (別パッケージ・別ICDのため併存できる)
-ARG INTEL_IGC_LEGACY_VER=1.0.17537.24
-ARG INTEL_IGC_CORE_LEGACY_SHA256=c1e1ecdfe2064c047c552651cfdcdafc504f2033afafba65654338b880048b67
-ARG INTEL_IGC_OPENCL_LEGACY_SHA256=dd016400f87fa2b6a9fa9fbcca7eb4a2629174a29de679709f9bec5cede88b0e
-ARG INTEL_OPENCL_LEGACY1_VER=24.35.30872.36
-ARG INTEL_OPENCL_LEGACY1_SHA256=bbe71e4f414259e06a10cde72c29a2bd78d41b2bb2f6f8463b1806797fe66e85
-ARG AMDGPU_INSTALL_VER=25.35.1
-ARG AMDGPU_INSTALL_DEB_VER=7.2.1.70201-1
-
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Tokyo
 ENV LANG=ja_JP.UTF-8
@@ -66,36 +52,22 @@ ENV PATH="/app/exe_files:$PATH"
 # NVIDIA Container ToolkitにGPUとドライバ機能 (CUDA/NVENC/NVDEC) の注入を要求する
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+ENV LIBVA_DRIVERS_PATH=/usr/local/lib/dri
 
-# 同梱されないPython、字幕用フォントとGPU用の実行時依存を導入する
+# Same noble GPU runtimes as the other encoding containers; no host driver install.
+COPY docker/common/install-gpu-runtime.sh /tmp/install-gpu-runtime.sh
+RUN ENABLE_AMD_AMF="$ENABLE_VCEENC_AMF" sh /tmp/install-gpu-runtime.sh && rm /tmp/install-gpu-runtime.sh
+
+# Fonts/Python plus rigaya encoders; the release bundle supports amd64 only.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl wget gpg tzdata locales gosu python3 xz-utils \
+        ca-certificates curl wget tzdata locales gosu python3 xz-utils \
         fontconfig fontconfig-config fonts-noto-cjk \
-    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${INTEL_GRAPHICS_PPA_KEY}" \
-        | gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics-ppa.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/intel-graphics-ppa.gpg] https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu $UBUNTU_NAME main" \
-        > /etc/apt/sources.list.d/intel-graphics-ppa.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        intel-media-va-driver-non-free intel-opencl-icd libigfxcmrt7 \
-        libmfx1 libmfx-gen1.2 libva-drm2 libva-x11-2 ocl-icd-libopencl1 \
-        mesa-va-drivers mesa-opencl-icd i965-va-driver-shaders \
     && wget -q "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/${CUDA_NVRTC_DEB}" -O /tmp/cuda-nvrtc.deb \
     && echo "${CUDA_NVRTC_SHA256}  /tmp/cuda-nvrtc.deb" | sha256sum -c - \
     && apt-get install -y --no-install-recommends /tmp/cuda-nvrtc.deb \
     && ln -sf libnvrtc.so.11.2 /usr/local/cuda-11.8/targets/x86_64-linux/lib/libnvrtc.so \
     && echo /usr/local/cuda-11.8/targets/x86_64-linux/lib > /etc/ld.so.conf.d/cuda-nvrtc.conf \
-    && ldconfig \
-    && wget -q "https://github.com/intel/intel-graphics-compiler/releases/download/igc-${INTEL_IGC_LEGACY_VER}/intel-igc-core_${INTEL_IGC_LEGACY_VER}_amd64.deb" -O /tmp/intel-igc-core.deb \
-    && wget -q "https://github.com/intel/intel-graphics-compiler/releases/download/igc-${INTEL_IGC_LEGACY_VER}/intel-igc-opencl_${INTEL_IGC_LEGACY_VER}_amd64.deb" -O /tmp/intel-igc-opencl.deb \
-    && wget -q "https://github.com/intel/compute-runtime/releases/download/${INTEL_OPENCL_LEGACY1_VER}/intel-opencl-icd-legacy1_${INTEL_OPENCL_LEGACY1_VER}_amd64.deb" -O /tmp/intel-opencl-icd-legacy1.deb \
-    && printf '%s  %s\n' \
-        "${INTEL_IGC_CORE_LEGACY_SHA256}" /tmp/intel-igc-core.deb \
-        "${INTEL_IGC_OPENCL_LEGACY_SHA256}" /tmp/intel-igc-opencl.deb \
-        "${INTEL_OPENCL_LEGACY1_SHA256}" /tmp/intel-opencl-icd-legacy1.deb | sha256sum -c - \
-    && apt-get install -y --no-install-recommends \
-        /tmp/intel-igc-core.deb /tmp/intel-igc-opencl.deb /tmp/intel-opencl-icd-legacy1.deb \
     && ldconfig \
     && wget -q "https://github.com/rigaya/QSVEnc/releases/download/${QSVENCC_VER}/qsvencc_${QSVENCC_VER}_${ARCH}.deb" -O /tmp/qsvencc.deb \
     && apt-get install -y --no-install-recommends /tmp/qsvencc.deb \
@@ -106,26 +78,10 @@ RUN apt-get update \
     && if [ ! -e /lib/x86_64-linux-gnu/libOpenCL.so ] && [ -e /lib/x86_64-linux-gnu/libOpenCL.so.1 ]; then \
         ln -s /lib/x86_64-linux-gnu/libOpenCL.so.1 /lib/x86_64-linux-gnu/libOpenCL.so; \
     fi \
-    && if [ "$ENABLE_VCEENC_AMF" = "1" ]; then \
-        wget -q "https://repo.radeon.com/amdgpu-install/${AMDGPU_INSTALL_VER}/ubuntu/${UBUNTU_NAME}/amdgpu-install_${AMDGPU_INSTALL_DEB_VER}_all.deb" -O /tmp/amdgpu-install.deb \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends software-properties-common /tmp/amdgpu-install.deb \
-        && amdgpu-install -y --usecase=opencl --opencl=rocr --no-dkms \
-        && wget -q https://repo.radeon.com/amdgpu/6.4.4/ubuntu/pool/proprietary/a/amdgpu-pro-core/amdgpu-pro-core_25.10-2203192.24.04_all.deb -O /tmp/amdgpu-pro-core.deb \
-        && wget -q https://repo.radeon.com/amdgpu/6.4.4/ubuntu/pool/proprietary/liba/libamdenc-amdgpu-pro/libamdenc-amdgpu-pro_25.10-2203192.24.04_amd64.deb -O /tmp/libamdenc-amdgpu-pro.deb \
-        && wget -q https://repo.radeon.com/amdgpu/6.4.4/ubuntu/pool/proprietary/a/amf-amdgpu-pro/amf-amdgpu-pro_1.4.37-2203192.24.04_amd64.deb -O /tmp/amf-amdgpu-pro.deb \
-        && (apt-get remove --purge -y amf-amdgpu-pro libamdenc-amdgpu-pro || true) \
-        && apt-get install -y --allow-downgrades \
-            /tmp/amdgpu-pro-core.deb /tmp/libamdenc-amdgpu-pro.deb /tmp/amf-amdgpu-pro.deb \
-        && apt-mark hold amdgpu-pro-core libamdenc-amdgpu-pro amf-amdgpu-pro \
-        && rm -f /tmp/amdgpu-install.deb /tmp/amdgpu-pro-core.deb \
-            /tmp/libamdenc-amdgpu-pro.deb /tmp/amf-amdgpu-pro.deb; \
-    fi \
     && fc-cache -f \
     && locale-gen ja_JP.UTF-8 en_US.UTF-8 \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo "$TZ" > /etc/timezone \
-    && rm -f /tmp/intel-igc-core.deb /tmp/intel-igc-opencl.deb /tmp/intel-opencl-icd-legacy1.deb \
     && rm -f /tmp/cuda-nvrtc.deb /tmp/qsvencc.deb /tmp/nvencc.deb /tmp/vceencc.deb \
     && rm -rf /var/lib/apt/lists/*
 

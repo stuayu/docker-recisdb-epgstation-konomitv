@@ -32,6 +32,7 @@ flowchart LR
 ## 必要なもの
 
 - Linux 録画ホスト。Ubuntu 24.04 LTS または Debian 12 を推奨します。
+- 全 Dockerfile の builder / runtime を Ubuntu 24.04 LTS (noble) に統一しています。KonomiTV の runtime は Ubuntu 24.04 ベースの CUDA イメージです。Intel Gen9〜11 の Media SDK / legacy1 OpenCL と新世代 oneVPL、AMD VA-API / AMF / ROCm に対応します。GPU 自動検出・実エンコード判定・手動設定保護と実機確認手順は [GPU 設定ガイド](docs/GPU.md) を参照してください。
 - Docker Engine と Compose v2。初回ビルドに数 GB の空きディスク容量が必要です。メモリは 8 GB 以上を推奨します。
 - recisdb-proxy-rs が対応するチューナーと Linux ドライバー。例: PLEX PX-W3U4 / PX-Q3U4 / PX-MLT 系、DTV02A など。型番・ドライバー版で対応状況が異なります。`/dev/px4video*`、`/dev/pt3video*`、`/dev/pxmlt5video*`、`/dev/isdb2056video*` または `/dev/dvb/adapterN` のノードを使います。`isdb6014video*` は参照 README に対応記載がありません。
 - B-CAS または ACAS カードとカードリーダー。カードホストと録画ホストは同じ LAN に置いてください。カードホストは録画ホストと同じマシンでも構いません。
@@ -223,7 +224,7 @@ sudo usermod -aG video "$USER"
 
 #### GPU (任意)
 
-Intel / AMD はホストに `/dev/dri/renderD128` 等があることを確認します。setup.sh は GPU デバイスの所有 GID を `RENDER_GID` に保存し、KonomiTV・EPGStation・Amatsukaze に渡します。チューナーデバイスはノードごとの所有 GID を `TUNER_GIDS` に保存し、recisdb-proxy に渡します。`make tuners` は USB や DVB デバイスの追加後に GID と Compose を再生成します。KonomiTV Dockerfile には Intel Media Driver (`intel-media-va-driver-non-free` 等) が含まれるため、Intel QSV / VAAPI 用ユーザー空間パッケージをホストへ重ねて入れる必要はありません。AMD VCE は [KonomiTV README の AMDGPU-PRO driver 節](https://github.com/stuayu/KonomiTV#linux---vceencc)を確認してください。
+Intel / AMD はホストに `/dev/dri/renderD*` があることを確認します。setup.sh は選択 GPU の vendor ID に対応する render node を選び、`RENDER_GID` と AMD 用 `VIDEO_GID` を保存します。GPU override は recisdb-proxy・EPGStation・KonomiTV と、有効時の Amatsukaze にデバイスとグループを渡します。AMD の `/dev/kfd` は ROCm/OpenCL 用の任意デバイスで、存在する場合だけ追加 overlay で渡します。チューナーデバイスはノードごとの所有 GID を `TUNER_GIDS` に保存し、recisdb-proxy に渡します。`make tuners` は USB や DVB デバイスの追加後に GID と Compose を再生成します。KonomiTV Dockerfile には Intel Media Driver (`intel-media-va-driver-non-free` 等) が含まれるため、Intel QSV / VAAPI 用ユーザー空間パッケージをホストへ重ねて入れる必要はありません。AMD VCE は [KonomiTV README の AMDGPU-PRO driver 節](https://github.com/stuayu/KonomiTV#linux---vceencc)を確認してください。
 
 ```bash
 ls -l /dev/dri/renderD*
@@ -242,7 +243,7 @@ sudo apt install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 docker info --format '{{json .Runtimes}}'
-docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
 ```
 
 `docker info` に `nvidia` runtime があり、最後のコンテナから GPU 情報が出れば確認完了です。KonomiTV の Dockerfile は CUDA 12.8 base を使います。
@@ -316,7 +317,7 @@ cd docker-recisdb-epgstation-konomitv
 ./scripts/gen-tuners.sh
 ```
 
-`.env` の `BONCAS_B25_HOST`、`BONCAS_B25_PORT`、`BONCAS_4K_HOST`、`BONCAS_4K_PORT`、`RECORDED_DIR`、`TUNER_GIDS`、`TUNER_EXCLUDE`、`RENDER_GID`、`KONOMITV_SOURCE` を環境に合わせます。通常は `make tuners` と setup.sh が除外後のデバイス所有 GID を再計算します。旧 `VIDEO_GID` は廃止し、Intel 設定時の値は `RENDER_GID` に移行します。
+`.env` の `BONCAS_B25_HOST`、`BONCAS_B25_PORT`、`BONCAS_4K_HOST`、`BONCAS_4K_PORT`、`RECORDED_DIR`、`TUNER_GIDS`、`TUNER_EXCLUDE`、`RENDER_GID`、`KONOMITV_SOURCE` を環境に合わせます。通常は `make tuners` と setup.sh が除外後のデバイス所有 GID を再計算します。旧 Intel 構成の `VIDEO_GID` は `RENDER_GID` の移行元として扱います。AMD の `VIDEO_GID` は video グループとして別に保存します。
 
 ```bash
 docker compose config
@@ -326,7 +327,7 @@ make scan
 docker compose logs -f recisdb-proxy
 ```
 
-`.env` の `COMPOSE_FILE` は Compose ファイルのコロン区切りです。標準は `compose.yaml:compose.tuners.yaml`。Intel は `:compose.intel.yaml`、NVIDIA は `:compose.nvidia.yaml`、EDCB は `:compose.edcb.yaml` を加えます。EDCB と HTTPS を併用するときは末尾に `:compose.edcb.https.yaml` も加えます。NVIDIA には NVIDIA Container Toolkit が必要です。MariaDB は標準で起動し、setup.sh がパスワードを自動生成します。
+`.env` の `COMPOSE_FILE` は Compose ファイルのコロン区切りです。標準は `compose.yaml:compose.tuners.yaml`。Intel は `:compose.intel.yaml`、AMD は `:compose.amd.yaml` を加え、`/dev/kfd` があれば setup.sh が `:compose.amd.kfd.yaml` も加えます。NVIDIA は `:compose.nvidia.yaml`、EDCB は `:compose.edcb.yaml` を加えます。EDCB と HTTPS を併用するときは末尾に `:compose.edcb.https.yaml` も加えます。NVIDIA には NVIDIA Container Toolkit が必要です。MariaDB は標準で起動し、setup.sh がパスワードを自動生成します。
 
 EPGStation の DB は MariaDB 固定です。設定ファイルは `setup.sh` が初回だけ `config/<サービス名>/` に生成します (テンプレートは `templates/` にあります)。既存のファイルは上書きしません。`BONCAS_B25_HOST` / `BONCAS_B25_PORT` は recisdb-proxy の設定へ、`BONCAS_4K_HOST` が空なら 4K 設定を省いて生成します。`.env` の値を後から変えた場合は、「設定ファイルの編集」の `make regen-config` を使ってください。
 
@@ -387,13 +388,15 @@ BonCasLink 互換通信は平文・無認証です。BonCasRelay は信頼でき
 | --- | --- |
 | `compose.yaml` | recisdb-proxy、EPGStation、KonomiTV、標準の MariaDB サービス |
 | `compose.tuners.yaml` | `make tuners` / setup が `/dev` から生成するチューナー公開設定 |
-| `compose.intel.yaml` / `compose.nvidia.yaml` | KonomiTV コンテナへの GPU デバイス設定 |
+| `compose.intel.yaml` / `compose.amd.yaml` / `compose.nvidia.yaml` | recisdb-proxy・EPGStation・KonomiTV への GPU 設定 |
+| `compose.amd.kfd.yaml` | `/dev/kfd` がある AMD ホストでの ROCm/OpenCL 用設定 |
 | `compose.boncasrelay.yaml` | 任意の BonCasRelay と USB カードリーダー、限定サブネット |
 | `compose.storage.yaml` | 複数録画先の追加マウント。セットアップが生成します |
 | `compose.edcb.yaml` | 任意の EDCB と Material WebUI |
 | `compose.edcb.https.yaml` | EDCB と HTTPS の両方が有効な場合の Akebi 経路 |
 | `compose.amatsukaze.yaml` | 任意の Amatsukaze と EPGStation 連携設定 |
-| `compose.amatsukaze.intel.yaml` / `compose.amatsukaze.nvidia.yaml` | Amatsukaze 有効時専用の GPU 設定 |
+| `compose.amatsukaze.intel.yaml` / `compose.amatsukaze.amd.yaml` / `compose.amatsukaze.nvidia.yaml` | Amatsukaze 有効時専用の GPU 設定 |
+| `compose.amatsukaze.amd.kfd.yaml` | Amatsukaze と AMD KFD overlay の併用設定 |
 | `compose.https.yaml` | 任意の Akebi HTTPS gateway |
 | `.env.example` | 初期環境変数の例 |
 | `setup.sh` | 対話式初回セットアップ |
@@ -468,7 +471,7 @@ Amatsukaze は `COMPOSE_FILE` に `compose.amatsukaze.yaml` を追加したと�
 
 `EPGStation` プロファイルは上流 `defaults/profile/デフォルト.profile` の XML を基に、名前を `EPGStation`、`DisableChapter=false`、`OutputMask=2` (CM カット) に変更したものです。`EncoderType=x264`、MP4、`NoDelogo=false` (ロゴ消し有効)、CUDA 無効、入力移動・リネーム無効です。字幕は上流既定どおり無効です。局別ロゴと CM 解析設定は必要です。WebUI で品質やインターレース解除、字幕を調整してください。
 
-GPU 利用時も初期プロファイルは x264 のままです。Intel/AMD は `compose.intel.yaml` に加えて `compose.amatsukaze.intel.yaml`、NVIDIA は `compose.nvidia.yaml` に加えて `compose.amatsukaze.nvidia.yaml` を選びます。setup.sh は Amatsukaze 有効時だけ専用ファイルを追加します。GPU ファイルだけで未定義サービスが作られることを避けるため、共通 GPU override に Amatsukaze のサービス定義は混ぜていません。WebUI で `EPGStation` を複製し、QSVEnc/NVEnc/VCEEnc を選択して実機確認するか、`EPGStation` のエンコーダーを変更してください。プロファイル名は EPGStation 側のコマンド引数と一致させます。
+setup.sh はイメージビルド後に実エンコードを試し、未編集の `EPGStation` プロファイルを QSVEnc / NVEnc / VCEEnc / x264 に設定します。Intel は `compose.intel.yaml` と `compose.amatsukaze.intel.yaml`、AMD は `compose.amd.yaml` と `compose.amatsukaze.amd.yaml`、NVIDIA は `compose.nvidia.yaml` と `compose.amatsukaze.nvidia.yaml` を選びます。専用ファイルは Amatsukaze 有効時だけ追加します。手動編集済みファイルは上書きしません。プローブ結果とバックアップ、手動反映手順は [GPU 設定ガイド](docs/GPU.md) を参照してください。
 
 ### 自動生成する EPGStation 設定
 
@@ -545,7 +548,7 @@ WebUI は `AMATSUKAZE_WEBUI_PORT` (既定 32769) で公開します。今回の 
 | ロゴ待ち / CM カットされない | WebUI のサービス設定でロゴを割り当て、CM 解析無効を解除。`JL_標準.txt` と放送局固有設定を確認 |
 | 保存に失敗 / permission denied | `.env` の `RUN_UID` / `RUN_GID` と録画・出力ディレクトリの権限を確認。既存 TS の所有権は自動変更しない |
 | 再エンコードで以前の出力が置き換わる | Amatsukaze が入力名から出力名を決めるため、出力先フォルダーを分ける |
-| GPU が使われない | 専用 GPU override、ホストのドライバーと Toolkit、WebUI のプロファイルのエンコーダー選択を確認。初期値は x264 |
+| GPU が使われない | GPU override、ホストのドライバーと Toolkit、`config/gpu-probe-log.json` と手動編集保護によるスキップを確認 |
 
 根拠: [ProfileSetting と出力マスク](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/AmatsukazeServer/Server/EncodeServerData.cs)、[局別 CM 解析・ロゴ消しの適用](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/AmatsukazeServer/Server/TranscodeWorker.cs)、[上流既定プロファイル](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/defaults/profile/デフォルト.profile)、[Linux インストール](https://github.com/rigaya/Amatsukaze/blob/1.1.1.2/doc/InstallLinux.md)、[EPGStation 連携コマンド](https://github.com/stuayu/EPGStation/blob/main/src/AmatsukazeEncodeTool.ts)、[パス変換](https://github.com/stuayu/EPGStation/blob/main/src/model/amatsukaze/AmatsukazeConfigResolver.ts)。
 
@@ -564,7 +567,7 @@ WebUI は `AMATSUKAZE_WEBUI_PORT` (既定 32769) で公開します。今回の 
 
 `./setup.sh` が選択・ポート・実行 UID/GID・仮想チューナー数を設定します。非対話では `EDCB=yes ./setup.sh --yes`、無効にする場合は `EDCB=no ./setup.sh --yes` を指定します。選択は `SETUP_EDCB` に保存します。設定だけなら `--reconfigure` を付け、`make build && make up` で反映します。EDCB 無効時は EDCB 用サービス・HTTPS 経路を読み込みません。KonomiTV のバックエンドは引き続き recisdb-proxy の Mirakurun 互換 API です。
 
-EDCB `my-build` を Debian bookworm で `make -C Document/Unix` / `install_u` によりビルドします。Lua は Debian の `liblua5.2-dev` / `lua-zlib` を利用します。Material WebUI は本家 [EMWUI/EDCB_Material_WebUI](https://github.com/EMWUI/EDCB_Material_WebUI) の `E3` ブランチから `HttpPublic` と `Setting` を組み込みます。WebUI は `/E3/` で配信されます (`http://<録画ホストIP>:5510/E3/`)。E3 の導入手順 (`HttpPublic` と `Setting` の配置、`HttpPort=5510`、`HttpNumThreads` の増設) と EDCB 側の要件 (Lua 5.2) を確認し、`configure.py` は `HttpNumThreads=50` を初期値にします。E3 が呼ぶ EDCB Lua API は `stuayu/EDCB` の `my-build` の `Document/Readme_Mod.txt` に記載されたものだけで、`FindFilePlain` は `FindFile` が無いときの代替です。根拠: [E3 導入](https://github.com/EMWUI/EDCB_Material_WebUI/blob/E3/README.md#導入)、[Readme_Mod.txt](https://github.com/stuayu/EDCB/blob/my-build/Document/Readme_Mod.txt)、[util.lua の FindFile 分岐](https://github.com/EMWUI/EDCB_Material_WebUI/blob/E3/HttpPublic/E3/util.lua)。ソースは Docker ビルド時に取得し、このリポジトリには複製しません。EpgTimerSrv はコンテナ内でフォアグラウンド常駐し、tini と `restart: unless-stopped` が管理します。systemd は不要です。停止猶予は上流の unit 例に合わせて 50 秒です。根拠: [HowToBuild.txt の Linux 節](https://github.com/stuayu/EDCB/blob/my-build/Document/HowToBuild.txt#L104-L200)、[Unix/Makefile](https://github.com/stuayu/EDCB/blob/my-build/Document/Unix/Makefile)、[WebUI の配置](https://github.com/EMWUI/EDCB_Material_WebUI/blob/E3/README.md#導入)。
+EDCB `my-build` を Ubuntu 24.04 LTS で `make -C Document/Unix` / `install_u` によりビルドします。Lua は Ubuntu noble の `liblua5.2-dev` / `lua-zlib` を利用します。Material WebUI は本家 [EMWUI/EDCB_Material_WebUI](https://github.com/EMWUI/EDCB_Material_WebUI) の `E3` ブランチから `HttpPublic` と `Setting` を組み込みます。WebUI は `/E3/` で配信されます (`http://<録画ホストIP>:5510/E3/`)。E3 の導入手順 (`HttpPublic` と `Setting` の配置、`HttpPort=5510`、`HttpNumThreads` の増設) と EDCB 側の要件 (Lua 5.2) を確認し、`configure.py` は `HttpNumThreads=50` を初期値にします。E3 が呼ぶ EDCB Lua API は `stuayu/EDCB` の `my-build` の `Document/Readme_Mod.txt` に記載されたものだけで、`FindFilePlain` は `FindFile` が無いときの代替です。根拠: [E3 導入](https://github.com/EMWUI/EDCB_Material_WebUI/blob/E3/README.md#導入)、[Readme_Mod.txt](https://github.com/stuayu/EDCB/blob/my-build/Document/Readme_Mod.txt)、[util.lua の FindFile 分岐](https://github.com/EMWUI/EDCB_Material_WebUI/blob/E3/HttpPublic/E3/util.lua)。ソースは Docker ビルド時に取得し、このリポジトリには複製しません。EpgTimerSrv はコンテナ内でフォアグラウンド常駐し、tini と `restart: unless-stopped` が管理します。systemd は不要です。停止猶予は上流の unit 例に合わせて 50 秒です。根拠: [HowToBuild.txt の Linux 節](https://github.com/stuayu/EDCB/blob/my-build/Document/HowToBuild.txt#L104-L200)、[Unix/Makefile](https://github.com/stuayu/EDCB/blob/my-build/Document/Unix/Makefile)、[WebUI の配置](https://github.com/EMWUI/EDCB_Material_WebUI/blob/E3/README.md#導入)。
 
 ### チューナー接続方式の比較
 
@@ -622,13 +625,13 @@ KonomiTV と EPGStation の接続先は変えません。全サービスのス�
 
 ### この変更の検証範囲
 
-Mac 上で shellcheck、bash 構文検査、`make test`、Compose YAML 読み込み、Compose v2.39.4 の実際の `config` による 24 通り (EDCB × Amatsukaze × HTTPS × GPU 3 種) の構成検証を実施しました。`tests/compose_test.py` は `COMPOSE_BIN=/path/to/docker-compose python3 tests/compose_test.py` で再実行できます。
+Mac 上の検証対象は shellcheck、bash 構文検査、`make test`、Compose YAML 読み込み、Compose CLI の実際の `config` による 128 通り (BonCasRelay × EDCB × Amatsukaze × HTTPS × GPU 4 種 × KFD 有無。AMD 以外は KFD 有無による差分なし) の構成です。`tests/compose_test.py` は `COMPOSE_BIN=/path/to/docker-compose python3 tests/compose_test.py` で再実行できます。
 
 設定ファイルの初回生成・再生成・移行・バックアップと復元は `tests/config_test.py` と `tests/setup_test.sh` で、Docker をスタブに置き換えて検証しています。実際のコンテナ起動による確認は含みません。
 
-生成した EPGStation config.yml はローカルフォークの実物の `IConfigFile.ts` に対して TypeScript の `Partial<IConfigFile>` で型照合し、`ConfigSchema.ts` の DB キーも確認しました。EDCB、Lua 5.2、両候補の BonDriver は x86_64 Linux ELF にクロスビルドしました。クロス環境では CC/CXX/LD/OBJCOPY を Linux 向けに指定し、古い sysroot 用に `-ldl -lrt` を明示しました。Dockerfile は bookworm の glibc と Debian 配布 Lua を使うため、このクロス環境向け補助指定は不要です。
+生成した EPGStation config.yml はローカルフォークの実物の `IConfigFile.ts` に対して TypeScript の `Partial<IConfigFile>` で型照合し、`ConfigSchema.ts` の DB キーも確認しました。EDCB、Lua 5.2、両候補の BonDriver は x86_64 Linux ELF にクロスビルドしました。クロス環境では CC/CXX/LD/OBJCOPY を Linux 向けに指定し、古い sysroot 用に `-ldl -lrt` を明示しました。Dockerfile は noble の glibc と Ubuntu 配布 Lua を使うため、このクロス環境向け補助指定は不要です。
 
-この Mac には Docker daemon がないため、bookworm イメージ全体のビルド・起動、MariaDB 実接続、EDCB WebUI の実応答、EPG 取得、実録画・復号・KonomiTV との同時利用、Akebi 経路は未検証です。Linux 録画ホストでこれらを確認してください。
+この Mac には Docker daemon がないため、Ubuntu 24.04 イメージ全体のビルド・起動、MariaDB 実接続、EDCB WebUI の実応答、EPG 取得、実録画・復号・KonomiTV との同時利用、Akebi 経路は未検証です。Linux 録画ホストでこれらを確認してください。
 
 
 ## 画面で選ぶセットアップと再設定
@@ -691,7 +694,7 @@ local を選ぶと `compose.boncasrelay.yaml` を追加し、公開ソースか�
 
 USB は `/dev/bus/usb` 全体をバインドし、`device_cgroup_rules: ['c 189:* rw']` で USB device major 189 の全 minor に読み書きを許可します。固定の `devices:` では再接続後のノード番号変更に対応できないため、この方式を採用しています。`privileged`・ホストの PC/SC socket・ホストネットワークは使いません。ただしコンテナから全 USB デバイスにアクセスできる点は把握してください。根拠は [Linux device 番号表](https://docs.kernel.org/admin-guide/devices.html)と [Compose device_cgroup_rules](https://docs.docker.com/reference/compose-file/services/#device_cgroup_rules) です。
 
-さらに sysfs の CCID インターフェース (`bInterfaceClass=0x0b`) に対応する busnum/devnum の集合を 2 秒ごとに確認し、リーダーの増減・再列挙があればコンテナを終了して `restart: unless-stopped` で pcscd と Relay を起動し直します。[pcsc-lite の udev 実装](https://github.com/LudovicRousseau/PCSC/blob/1.9.9/src/hotplug_libudev.c)はイベントを監視しますが、コンテナ内へのホストイベント通知を前提にせず、再起動時の列挙で回復させます。無関係な USB 機器やチューナーの接続変更では再起動しません。`/dev/bus/usb` がなければ警告して監視を無効化し、サービスを起動します。`pcscd --hotplug` は非 USB リーダー用、`--force-reader-polling` は IFD の通知能力を無視する指定で、udev の USB 再検出ポーリングを有効にするものではありません ([Debian bookworm の manpage](https://manpages.debian.org/bookworm/pcscd/pcscd.8.en.html))。配布版 pcscd の udev 実装を継続利用し、CCID が変化した場合にだけ再起動して回復します。USB 抜き差し後の実際の再接続・復号は Linux 実機で確認してください。
+さらに sysfs の CCID インターフェース (`bInterfaceClass=0x0b`) に対応する busnum/devnum の集合を 2 秒ごとに確認し、リーダーの増減・再列挙があればコンテナを終了して `restart: unless-stopped` で pcscd と Relay を起動し直します。[pcsc-lite の udev 実装](https://github.com/LudovicRousseau/PCSC/blob/1.9.9/src/hotplug_libudev.c)はイベントを監視しますが、コンテナ内へのホストイベント通知を前提にせず、再起動時の列挙で回復させます。無関係な USB 機器やチューナーの接続変更では再起動しません。`/dev/bus/usb` がなければ警告して監視を無効化し、サービスを起動します。`pcscd --hotplug` は非 USB リーダー用、`--force-reader-polling` は IFD の通知能力を無視する指定で、udev の USB 再検出ポーリングを有効にするものではありません ([Ubuntu noble の manpage](https://manpages.ubuntu.com/manpages/noble/en/man8/pcscd.8.html))。配布版 pcscd の udev 実装を継続利用し、CCID が変化した場合にだけ再起動して回復します。USB 抜き差し後の実際の再接続・復号は Linux 実機で確認してください。
 
 ホストの `pcscd.service` または `pcscd.socket` が有効な場合は、両方の停止・無効化を表示して確認します。別アプリでもカードリーダーを使っている場合は、影響を確認してから選択してください。設定は `config/boncasrelay/boncasrelay.ini`、ログは `docker compose logs boncasrelay` です。
 

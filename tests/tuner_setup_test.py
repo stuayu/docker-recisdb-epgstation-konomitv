@@ -427,6 +427,7 @@ esac
         binaries.mkdir()
         scripts = {
             'curl': 'exit 0', 'getent': 'echo video:x:44:', 'systemctl': 'exit 1',
+            'stat': 'case $2 in %u:%g) echo 1000:1000;; %g) echo 44;; esac',
             'id': 'case $1 in -u|-g) echo 1000;; -un) echo tester;; esac',
             'lsusb': 'exit 0', 'lspci': 'exit 0', 'modinfo': 'exit 0',
             'ip': 'echo "1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.30"',
