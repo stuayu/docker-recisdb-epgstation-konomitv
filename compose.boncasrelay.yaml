@@ -14,7 +14,7 @@ services:
     device_cgroup_rules:
       - 'c 189:* rw'
     ports:
-      - '127.0.0.1:${BONCASRELAY_WEB_PORT:-6980}:6980'
+      - '${BONCASRELAY_WEB_BIND:-127.0.0.1}:${BONCASRELAY_WEB_PORT:-6980}:6980'
   recisdb-proxy:
     depends_on:
       boncasrelay:
