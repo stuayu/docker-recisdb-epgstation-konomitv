@@ -33,7 +33,7 @@
 
 KonomiTV の3行だけは、このタスク開始時点の既存変更後を比較元にしています。確認した外部チェックアウトの `HEAD` 自体は `ubuntu:22.04` / `node:20.16.0` / `nvidia/cuda:12.8.0-base-ubuntu22.04` であり、Ubuntu 24.04 化の既存変更を保持した上で Node.js ステージ等を揃えています。スタック側にも、作業開始時には一部を trixie に寄せる既存変更がありました。表はこれらを上書きして元に戻したという意味ではなく、最終的な noble 統一を示しています。
 
-KonomiTV はこのリポジトリの外にある `KONOMITV_SOURCE` の Dockerfile を使います。そこに同じ修正を適用したソースを指定してください。スタック側だけを更新しても、別ディレクトリの Dockerfile は更新されません。MariaDB は既存の `mariadb:latest` を継続し、Dockerfile の対象に含めていません。
+KonomiTV はこのリポジトリの外にある `KONOMITV_SOURCE` の Dockerfile を使います。既定では公式の `tsukumijima/KonomiTV` を取得します。公式 Dockerfile も Ubuntu 24.04 ベースで Intel QSV / AMD / NVIDIA に対応しますが、Gen9〜11 の Intel GPU 向け legacy OpenCL は含まないため、その世代では QSVEncC の OpenCL フィルターが無効になります (エンコード自体は動作します)。MariaDB は既存の `mariadb:latest` を継続し、Dockerfile の対象に含めていません。
 
 Ubuntu 内でソースからビルドすることで、Debian 側の新しい glibc や OpenSSL を前提とする実行ファイルを Ubuntu の最終イメージへコピーする構成を避けます。EPGStation のネイティブ依存は noble の `libicu74` / `libssl3t64`、recisdb-proxy は `libssl3t64` に合わせています。
 
@@ -165,7 +165,7 @@ docker info --format '{{json .Runtimes}}'
 docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
 ```
 
-新規検証環境の Intel 例です。AMD / NVIDIA / software は `GPU` の値を置き換えます。`KONOMITV_SOURCE` は今回の Dockerfile 修正を含む実際のパスにしてください。
+新規検証環境の Intel 例です。AMD / NVIDIA / software は `GPU` の値を置き換えます。`KONOMITV_SOURCE` は KonomiTV ソースの実際のパスにしてください。
 
 ```sh
 GPU=intel KONOMITV_SOURCE=/absolute/path/to/KonomiTV \

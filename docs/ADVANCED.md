@@ -7,7 +7,7 @@
 - Docker Engine と Compose v2。初回ビルドに数 GB の空きディスク容量が必要です。メモリは 8 GB 以上を推奨します。
 - recisdb-proxy-rs が対応するチューナーと Linux ドライバー。例: PLEX PX-W3U4 / PX-Q3U4 / PX-MLT 系、DTV02A など。型番・ドライバー版で対応状況が異なります。`/dev/px4video*`、`/dev/pt3video*`、`/dev/pxmlt5video*`、`/dev/isdb2056video*` または `/dev/dvb/adapterN` のノードを使います。`isdb6014video*` は参照 README に対応記載がありません。
 - B-CAS または ACAS カードとカードリーダー。カードホストと録画ホストは同じ LAN に置いてください。カードホストは録画ホストと同じマシンでも構いません。
-- KonomiTV の Dockerfile を含むソース。セットアップが `stuayu/KonomiTV` を取得できます。
+- KonomiTV の Dockerfile を含むソース。`KONOMITV_SOURCE` にソースがなければ、セットアップが公式の `tsukumijima/KonomiTV` (`KONOMITV_REPO` で変更可) を取得します。
 
 
 ### 録画ホスト (Linux + Docker)
@@ -117,7 +117,7 @@ HTTP 直通は従来どおり使えます。HTTPS 経路を有効にすると、
 | Amatsukaze (任意) | `http://<録画ホストIP>:32769/` | 対象外 |
 | KonomiTV | 対象外 | `https://<IPをハイフン区切り>.local.konomi.tv:7000/` |
 
-ポート番号で転送先を切り替えます。KonomiTV は内蔵 Akebi を使い、HTTP 直通は対象外です。本体 Uvicorn がコンテナ内 `127.0.0.77` だけで待ち受け、HTTP 直通にはフォーク改造が必要です。
+ポート番号で転送先を切り替えます。KonomiTV は内蔵 Akebi を使い、HTTP 直通は対象外です。本体 Uvicorn がコンテナ内 `127.0.0.77` だけで待ち受け、HTTP 直通には KonomiTV 本体の改造が必要です。
 
 EDCB の `/` と `/index.html` はダッシュボード、`/E3/` は EMWUI、`/legacy/` は従来の WebUI です。HTTP サーバー標準トップは `/legacy/` メニューのリンクから `/server.html` で開けます。
 表示名は `.env` の `DASHBOARD_TITLE` (既定 `録画サーバー`) で変更できます。サービス一覧・ポート・LAN IP は setup、`make update`、`make regen-config SERVICE=edcb` で `data/edcb/dashboard.json` に再生成します。この JSON は派生データなので直接編集せず、`.env` を変更してください。起動時に `HttpPublic/dashboard.json` からリンクし、再生成後はページの再読み込みで反映します。
@@ -239,7 +239,7 @@ recisdb-proxy の Web 認証は既定で無効です。`config/recisdb-proxy/rec
 
 EPGStation は `config/epgstation/config.yml` を `/app/config/config.yml` としてマウントします。起動時には書き換えず、ファイルがなければ起動を止めて setup.sh の実行を促します。ログ設定ファイルがなければフォークの `*.sample.yml` から生成し、`/app/logs` はホストの `data/epgstation-logs` に保存します。
 
-KonomiTV フォークは Akebi をコンテナ内 `0.0.0.0:server.port` で待ち受け、同じコンテナ内の `127.0.0.77:(server.port + 10)` の Uvicorn へ転送します。`<IPをハイフン区切り>.local.konomi.tv` はクライアントから Akebi に送る Host 名です。外向けの入口は Compose が公開する `7000` 番ポートです。設定は `config/konomitv/config.yaml` を `/code/config.yaml` としてマウントします (初期値は `templates/konomitv/config.yaml.example`)。KonomiTV はこのファイルへ設定を保存するため、読み書き可能でマウントしています。実装根拠はフォークの `server/KonomiTV.py` と `server/app/routers/MaintenanceRouter.py` です。
+KonomiTV は Akebi をコンテナ内 `0.0.0.0:server.port` で待ち受け、同じコンテナ内の `127.0.0.77:(server.port + 10)` の Uvicorn へ転送します。`<IPをハイフン区切り>.local.konomi.tv` はクライアントから Akebi に送る Host 名です。外向けの入口は Compose が公開する `7000` 番ポートです。設定は `config/konomitv/config.yaml` を `/code/config.yaml` としてマウントします (初期値は `templates/konomitv/config.yaml.example`)。KonomiTV はこのファイルへ設定を保存するため、読み書き可能でマウントしています。実装根拠はフォークの `server/KonomiTV.py` と `server/app/routers/MaintenanceRouter.py` です。
 
 
 ## 設定ファイルの編集

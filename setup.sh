@@ -399,8 +399,9 @@ DEV_DIR="$DEV_DIR" TUNER_EXCLUDE="$tuner_exclude" TUNERS_COMPOSE_FILE="$COMPOSE_
 source_path=$(get KONOMITV_SOURCE ../KonomiTV); source_path=${KONOMITV_SOURCE:-$source_path}; [[ $source_path = /* ]] || source_path="$ROOT/$source_path"
 if [[ ! -f $source_path/Dockerfile ]]; then
   ask "KonomiTV ソースがありません。$source_path に clone しますか" 'はい'
-  [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail 'KonomiTV ソースが必要です。' 'KONOMITV_SOURCE に Dockerfile を含むフォークのパスを指定してください。'
-  git clone https://github.com/stuayu/KonomiTV.git "$source_path" || fail 'KonomiTV の clone に失敗しました。' 'ネットワークと保存先の権限を確認してください。'
+  [[ $REPLY == はい || $REPLY == y || $REPLY == yes ]] || fail 'KonomiTV ソースが必要です。' 'KONOMITV_SOURCE に Dockerfile を含む KonomiTV ソースのパスを指定してください。'
+  konomitv_repo=$(get KONOMITV_REPO https://github.com/tsukumijima/KonomiTV.git); konomitv_repo=${KONOMITV_REPO:-$konomitv_repo}
+  git clone "$konomitv_repo" "$source_path" || fail 'KonomiTV の clone に失敗しました。' 'ネットワークと保存先の権限を確認してください。'
 fi
 # Create service config only when missing; existing files (user edits) are kept.
 ipaddr=$(python3 "$ROOT/scripts/dashboard.py")
